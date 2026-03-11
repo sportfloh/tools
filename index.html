@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Event Tracker</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json"/>
+  <meta name="theme-color" content="#4a90e2"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="default"/>
+  <meta name="apple-mobile-web-app-title" content="Event Tracker"/>
+
+  <!-- Trunk bundles -->
+  <link data-trunk rel="css" href="style/main.css"/>
+  <link data-trunk rel="copy-file" href="manifest.json"/>
+  <link data-trunk rel="copy-dir" href="public"/>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/service-worker.js').catch(function(err) {
+          console.log('ServiceWorker registration failed:', err);
+        });
+      });
+    }
+  </script>
+</head>
+<body></body>
+</html>
