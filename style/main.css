@@ -286,17 +286,20 @@ html, body {
 
 /* ── Colour schemes ───────────────────────────────────────────────────────── */
 /*
-  Four OS states and the palette we serve for each:
+  prefers-color-scheme  inverted-colors  CSS served  user perceives
+  ────────────────────  ───────────────  ──────────  ──────────────
+  light                 none             light        light  (default :root above)
+  dark                  none             dark         dark
+  light                 inverted         light        dark   (OS inverts our light CSS)
+  dark                  inverted         dark         light  (OS inverts our dark CSS)
 
-  prefers-color-scheme  inverted-colors  user perceives  → serve
-  ────────────────────  ───────────────  ──────────────  ───────
-  light                 none             light            light  (default :root above)
-  dark                  none             dark             dark
-  light                 inverted         dark             dark   (OS inversion → light)
-  dark                  inverted         light            light  (OS inversion → dark)
+  For the inverted cases we serve the SAME CSS as without inversion and let
+  the OS inversion do the visual flip.  We only adjust color-scheme so that
+  browser-native elements (scrollbars, inputs, autofill) also follow the
+  *perceived* (post-inversion) theme.
 
-  inverted-colors is currently only fired by Safari on macOS/iOS.
-  All other browsers safely ignore those extra blocks.
+  inverted-colors fires only in Safari on macOS/iOS; all other browsers
+  safely ignore those two blocks.
 */
 
 @media (prefers-color-scheme: dark) {
@@ -316,38 +319,12 @@ html, body {
   }
 }
 
-/* light system + OS inversion → user sees dark; serve dark so after inversion = light */
+/* light CSS + OS inversion → perceived dark; native UI should follow */
 @media (prefers-color-scheme: light) and (inverted-colors: inverted) {
-  :root {
-    color-scheme: dark;
-    --color-primary:      #5b9fe8;
-    --color-primary-dark: #4a90e2;
-    --color-danger-bg:    rgba(226,84,84,.15);
-    --header-shadow:      0 2px 8px rgba(74,144,226,.20);
-    --color-bg:           #0d1117;
-    --color-surface:      #161b22;
-    --color-border:       #30363d;
-    --color-text:         #e6edf3;
-    --color-muted:        #7d8590;
-    --shadow:             0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
-    --shadow-hover:       0 4px 16px rgba(0,0,0,.55), 0 0 1px rgba(0,0,0,.40);
-  }
+  :root { color-scheme: dark; }
 }
 
-/* dark system + OS inversion → user sees light; serve light so after inversion = dark */
+/* dark CSS + OS inversion → perceived light; native UI should follow */
 @media (prefers-color-scheme: dark) and (inverted-colors: inverted) {
-  :root {
-    color-scheme: light;
-    --color-primary:      #4a90e2;
-    --color-primary-dark: #2e6fbf;
-    --color-danger-bg:    #fdeaea;
-    --header-shadow:      0 2px 8px rgba(74,144,226,.30);
-    --color-bg:           #f5f7fa;
-    --color-surface:      #ffffff;
-    --color-border:       #e0e6ed;
-    --color-text:         #1a2332;
-    --color-muted:        #6b7a8d;
-    --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
-    --shadow-hover:       0 4px 16px rgba(0,0,0,.12), 0 0 1px rgba(0,0,0,.08);
-  }
+  :root { color-scheme: light; }
 }
