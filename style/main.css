@@ -223,6 +223,24 @@ html, body {
 
 .event-item:last-child { border-bottom: none; }
 
+.event-time { flex: 1; }
+
+.btn-delete-event {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--color-muted);
+  cursor: pointer;
+  font-size: .75rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity .15s, color .15s;
+}
+.event-item:hover .btn-delete-event { opacity: 1; }
+.btn-delete-event:hover { color: var(--color-danger); }
+
 .event-icon {
   font-size: .85rem;
   opacity: .6;

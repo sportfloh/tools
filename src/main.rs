@@ -70,36 +70,34 @@ fn TopicCard(topic_id: String) -> impl IntoView {
     let topics = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
     let (expanded, set_expanded) = signal(false);
 
-    // Separate clones so each closure owns its ID.
-    let id1 = topic_id.clone();
+    // StoredValue is Copy, so a single tid can be captured by every closure,
+    // including those nested inside <Show>/<For> children that require Fn.
+    let tid = StoredValue::new(topic_id);
+
     let add_event = move |_| {
         topics.update(|ts| {
-            if let Some(t) = ts.iter_mut().find(|t| t.id == id1) {
-                t.events.push(TrackedEvent { id: new_id(), timestamp: now_timestamp() });
-            }
+            tid.with_value(|id| {
+                if let Some(t) = ts.iter_mut().find(|t| t.id == *id) {
+                    t.events.push(TrackedEvent { id: new_id(), timestamp: now_timestamp() });
+                }
+            });
         });
     };
 
-    let id2 = topic_id.clone();
     let delete_topic = move |_| {
-        topics.update(|ts| ts.retain(|t| t.id != id2));
+        topics.update(|ts| tid.with_value(|id| ts.retain(|t| t.id != *id)));
     };
 
-    // Use Memo (Copy) so these signals can be captured inside <Show> children
-    // closures that must implement Fn (called each time the Show condition changes).
-    let id3 = topic_id.clone();
     let topic_name = Memo::new(move |_| {
-        topics.with(|ts| ts.iter().find(|t| t.id == id3).map(|t| t.name.clone()).unwrap_or_default())
+        tid.with_value(|id| topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.name.clone()).unwrap_or_default()))
     });
 
-    let id4 = topic_id.clone();
     let event_count = Memo::new(move |_| {
-        topics.with(|ts| ts.iter().find(|t| t.id == id4).map(|t| t.events.len()).unwrap_or(0))
+        tid.with_value(|id| topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.events.len()).unwrap_or(0)))
     });
 
-    let id5 = topic_id;
     let display_events = Memo::new(move |_| {
-        let mut evs = topics.with(|ts| ts.iter().find(|t| t.id == id5).map(|t| t.events.clone()).unwrap_or_default());
+        let mut evs = tid.with_value(|id| topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.events.clone()).unwrap_or_default()));
         evs.reverse();
         evs
     });
@@ -137,11 +135,25 @@ fn TopicCard(topic_id: String) -> impl IntoView {
                             <For
                                 each=move || display_events.get()
                                 key=|ev| ev.id.clone()
-                                children=|ev| view! {
-                                    <li class="event-item">
-                                        <span class="event-icon">"🕐"</span>
-                                        {ev.timestamp}
-                                    </li>
+                                children=move |ev| {
+                                    // StoredValue is Copy so delete_event can be Fn
+                                    let eid = StoredValue::new(ev.id);
+                                    let delete_event = move |_| {
+                                        topics.update(|ts| {
+                                            tid.with_value(|id| {
+                                                if let Some(t) = ts.iter_mut().find(|t| t.id == *id) {
+                                                    eid.with_value(|eid| t.events.retain(|e| e.id != *eid));
+                                                }
+                                            });
+                                        });
+                                    };
+                                    view! {
+                                        <li class="event-item">
+                                            <span class="event-icon">"🕐"</span>
+                                            <span class="event-time">{ev.timestamp}</span>
+                                            <button class="btn-delete-event" on:click=delete_event title="Delete">"✕"</button>
+                                        </li>
+                                    }
                                 }
                             />
                         }
