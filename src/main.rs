@@ -66,35 +66,43 @@ fn new_id() -> String {
 // ─── Components ──────────────────────────────────────────────────────────────
 
 #[component]
-fn TopicCard(topic: Topic) -> impl IntoView {
+fn TopicCard(topic_id: String) -> impl IntoView {
     let topics = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
     let (expanded, set_expanded) = signal(false);
 
-    let add_event = {
-        let id = topic.id.clone();
-        move |_| {
-            topics.update(|ts| {
-                if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
-                    t.events.push(TrackedEvent {
-                        id: new_id(),
-                        timestamp: now_timestamp(),
-                    });
-                }
-            });
-        }
+    // Separate clones so each closure owns its ID.
+    let id1 = topic_id.clone();
+    let add_event = move |_| {
+        topics.update(|ts| {
+            if let Some(t) = ts.iter_mut().find(|t| t.id == id1) {
+                t.events.push(TrackedEvent { id: new_id(), timestamp: now_timestamp() });
+            }
+        });
     };
 
-    let delete_topic = {
-        let id = topic.id.clone();
-        move |_| {
-            topics.update(|ts| ts.retain(|t| t.id != id));
-        }
+    let id2 = topic_id.clone();
+    let delete_topic = move |_| {
+        topics.update(|ts| ts.retain(|t| t.id != id2));
     };
 
-    let topic_name = topic.name.clone();
-    let event_count = topic.events.len();
-    let mut display_events = topic.events.clone();
-    display_events.reverse(); // newest first
+    // Use Memo (Copy) so these signals can be captured inside <Show> children
+    // closures that must implement Fn (called each time the Show condition changes).
+    let id3 = topic_id.clone();
+    let topic_name = Memo::new(move |_| {
+        topics.with(|ts| ts.iter().find(|t| t.id == id3).map(|t| t.name.clone()).unwrap_or_default())
+    });
+
+    let id4 = topic_id.clone();
+    let event_count = Memo::new(move |_| {
+        topics.with(|ts| ts.iter().find(|t| t.id == id4).map(|t| t.events.len()).unwrap_or(0))
+    });
+
+    let id5 = topic_id;
+    let display_events = Memo::new(move |_| {
+        let mut evs = topics.with(|ts| ts.iter().find(|t| t.id == id5).map(|t| t.events.clone()).unwrap_or_default());
+        evs.reverse();
+        evs
+    });
 
     view! {
         <div class="topic-card">
@@ -102,10 +110,9 @@ fn TopicCard(topic: Topic) -> impl IntoView {
                 <div class="topic-title">
                     <h2>{topic_name}</h2>
                     <span class="event-count">
-                        {if event_count == 1 {
-                            "1 event".to_string()
-                        } else {
-                            format!("{} events", event_count)
+                        {move || {
+                            let count = event_count.get();
+                            if count == 1 { "1 event".to_string() } else { format!("{} events", count) }
                         }}
                     </span>
                 </div>
@@ -124,27 +131,25 @@ fn TopicCard(topic: Topic) -> impl IntoView {
             </div>
             <Show when=move || expanded.get()>
                 <ul class="event-list">
-                    {if display_events.is_empty() {
-                        view! {
-                            <li class="event-empty">
-                                "No events yet — press \"+ Add\" to log one."
-                            </li>
-                        }.into_any()
-                    } else {
-                        display_events
-                            .iter()
-                            .map(|ev| {
-                                let ts = ev.timestamp.clone();
-                                view! {
+                    <Show
+                        when=move || event_count.get() == 0
+                        fallback=move || view! {
+                            <For
+                                each=move || display_events.get()
+                                key=|ev| ev.id.clone()
+                                children=|ev| view! {
                                     <li class="event-item">
                                         <span class="event-icon">"🕐"</span>
-                                        {ts}
+                                        {ev.timestamp}
                                     </li>
                                 }
-                            })
-                            .collect_view()
-                            .into_any()
-                    }}
+                            />
+                        }
+                    >
+                        <li class="event-empty">
+                            "No events yet — press \"+ Add\" to log one."
+                        </li>
+                    </Show>
                 </ul>
             </Show>
         </div>
@@ -181,8 +186,7 @@ fn App() -> impl IntoView {
     view! {
         <div class="app">
             <header class="app-header">
-                <h1>"📋 Event Tracker"</h1>
-                <p class="subtitle">"Track anything, one tap at a time."</p>
+                <h1>"trackit"</h1>
             </header>
 
             <main class="app-main">
@@ -206,7 +210,7 @@ fn App() -> impl IntoView {
                             <For
                                 each=move || topics.get()
                                 key=|t| t.id.clone()
-                                children=|topic| view! { <TopicCard topic=topic /> }
+                                children=|topic| view! { <TopicCard topic_id=topic.id /> }
                             />
                         }
                     >

@@ -1,6 +1,6 @@
 {
-  "name": "Event Tracker",
-  "short_name": "Tracker",
+  "name": "trackit",
+  "short_name": "trackit",
   "description": "Track events for any topic with a single tap.",
   "start_url": "/",
   "display": "standalone",
