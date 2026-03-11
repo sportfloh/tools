@@ -6,18 +6,21 @@
 }
 
 :root {
-  --color-primary:   #4a90e2;
+  color-scheme: light;
+  --color-primary:      #4a90e2;
   --color-primary-dark: #2e6fbf;
-  --color-danger:    #e25454;
-  --color-danger-dark: #bf2e2e;
-  --color-bg:        #f5f7fa;
-  --color-surface:   #ffffff;
-  --color-border:    #e0e6ed;
-  --color-text:      #1a2332;
-  --color-muted:     #6b7a8d;
-  --radius:          12px;
-  --shadow:          0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
-  --shadow-hover:    0 4px 16px rgba(0,0,0,.12), 0 0 1px rgba(0,0,0,.08);
+  --color-danger:       #e25454;
+  --color-danger-dark:  #bf2e2e;
+  --color-danger-bg:    #fdeaea;
+  --color-bg:           #f5f7fa;
+  --color-surface:      #ffffff;
+  --color-border:       #e0e6ed;
+  --color-text:         #1a2332;
+  --color-muted:        #6b7a8d;
+  --radius:             12px;
+  --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
+  --shadow-hover:       0 4px 16px rgba(0,0,0,.12), 0 0 1px rgba(0,0,0,.08);
+  --header-shadow:      0 2px 8px rgba(74,144,226,.30);
 }
 
 html, body {
@@ -47,7 +50,7 @@ html, body {
   position: sticky;
   top: 0;
   z-index: 10;
-  box-shadow: 0 2px 8px rgba(74,144,226,.3);
+  box-shadow: var(--header-shadow);
 }
 
 .app-header h1 {
@@ -147,7 +150,7 @@ html, body {
   border-radius: 50%;
   font-size: 1rem;
 }
-.btn-danger:hover { background: #fdeaea; }
+.btn-danger:hover { background: var(--color-danger-bg); }
 
 /* ── Topic list ───────────────────────────────────────────────────────────── */
 .topic-list {
@@ -279,4 +282,72 @@ html, body {
   .add-topic-form { flex-direction: column; }
   .btn-add { height: 48px; }
   .topic-header { padding: 12px 12px; }
+}
+
+/* ── Colour schemes ───────────────────────────────────────────────────────── */
+/*
+  Four OS states and the palette we serve for each:
+
+  prefers-color-scheme  inverted-colors  user perceives  → serve
+  ────────────────────  ───────────────  ──────────────  ───────
+  light                 none             light            light  (default :root above)
+  dark                  none             dark             dark
+  light                 inverted         dark             dark   (OS inversion → light)
+  dark                  inverted         light            light  (OS inversion → dark)
+
+  inverted-colors is currently only fired by Safari on macOS/iOS.
+  All other browsers safely ignore those extra blocks.
+*/
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-primary:      #5b9fe8;
+    --color-primary-dark: #4a90e2;
+    --color-danger-bg:    rgba(226,84,84,.15);
+    --header-shadow:      0 2px 8px rgba(74,144,226,.20);
+    --color-bg:           #0d1117;
+    --color-surface:      #161b22;
+    --color-border:       #30363d;
+    --color-text:         #e6edf3;
+    --color-muted:        #7d8590;
+    --shadow:             0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
+    --shadow-hover:       0 4px 16px rgba(0,0,0,.55), 0 0 1px rgba(0,0,0,.40);
+  }
+}
+
+/* light system + OS inversion → user sees dark; serve dark so after inversion = light */
+@media (prefers-color-scheme: light) and (inverted-colors: inverted) {
+  :root {
+    color-scheme: dark;
+    --color-primary:      #5b9fe8;
+    --color-primary-dark: #4a90e2;
+    --color-danger-bg:    rgba(226,84,84,.15);
+    --header-shadow:      0 2px 8px rgba(74,144,226,.20);
+    --color-bg:           #0d1117;
+    --color-surface:      #161b22;
+    --color-border:       #30363d;
+    --color-text:         #e6edf3;
+    --color-muted:        #7d8590;
+    --shadow:             0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
+    --shadow-hover:       0 4px 16px rgba(0,0,0,.55), 0 0 1px rgba(0,0,0,.40);
+  }
+}
+
+/* dark system + OS inversion → user sees light; serve light so after inversion = dark */
+@media (prefers-color-scheme: dark) and (inverted-colors: inverted) {
+  :root {
+    color-scheme: light;
+    --color-primary:      #4a90e2;
+    --color-primary-dark: #2e6fbf;
+    --color-danger-bg:    #fdeaea;
+    --header-shadow:      0 2px 8px rgba(74,144,226,.30);
+    --color-bg:           #f5f7fa;
+    --color-surface:      #ffffff;
+    --color-border:       #e0e6ed;
+    --color-text:         #1a2332;
+    --color-muted:        #6b7a8d;
+    --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
+    --shadow-hover:       0 4px 16px rgba(0,0,0,.12), 0 0 1px rgba(0,0,0,.08);
+  }
 }
