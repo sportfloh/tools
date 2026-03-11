@@ -1,4 +1,4 @@
-use leptos::*;
+use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use web_sys::window;
 
@@ -6,13 +6,13 @@ const STORAGE_KEY: &str = "event_tracker_v1";
 
 // ─── Data model ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct TrackedEvent {
     id: String,
     timestamp: String,
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct Topic {
     id: String,
     name: String,
@@ -48,78 +48,69 @@ fn save_topics(topics: &[Topic]) {
     }
 }
 
-// ─── Utility ─────────────────────────────────────────────────────────────────
+// ─── Utilities ────────────────────────────────────────────────────────────────
 
 fn now_timestamp() -> String {
-    let d = js_sys::Date::new_0();
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        d.get_full_year(),
-        d.get_month() + 1,
-        d.get_date(),
-        d.get_hours(),
-        d.get_minutes(),
-        d.get_seconds()
-    )
+    js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default()
 }
 
 fn new_id() -> String {
-    format!("{}", js_sys::Date::now() as u64)
+    let ts = js_sys::Date::now() as u64;
+    let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
+    format!("{}-{}", ts, rand)
 }
 
 // ─── Components ──────────────────────────────────────────────────────────────
 
 #[component]
-fn TopicCard(topic_id: String, topics: RwSignal<Vec<Topic>>) -> impl IntoView {
-    let (expanded, set_expanded) = create_signal(false);
+fn TopicCard(topic: Topic) -> impl IntoView {
+    let topics = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
+    let (expanded, set_expanded) = signal(false);
 
-    let tid_for_derive = topic_id.clone();
-    let topic = Signal::derive(move || {
-        topics
-            .get()
-            .into_iter()
-            .find(|t| t.id == tid_for_derive)
-            .unwrap_or_else(|| Topic {
-                id: String::new(),
-                name: String::new(),
-                events: Vec::new(),
-            })
-    });
-
-    let tid_for_add = topic_id.clone();
-    let add_event = move |_| {
-        let new_event = TrackedEvent {
-            id: new_id(),
-            timestamp: now_timestamp(),
-        };
-        topics.update(|ts| {
-            if let Some(t) = ts.iter_mut().find(|t| t.id == tid_for_add) {
-                t.events.push(new_event);
-            }
-        });
+    let add_event = {
+        let id = topic.id.clone();
+        move |_| {
+            topics.update(|ts| {
+                if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
+                    t.events.push(TrackedEvent {
+                        id: new_id(),
+                        timestamp: now_timestamp(),
+                    });
+                }
+            });
+        }
     };
 
-    let tid_for_delete = topic_id.clone();
-    let delete_topic = move |_| {
-        topics.update(|ts| ts.retain(|t| t.id != tid_for_delete));
+    let delete_topic = {
+        let id = topic.id.clone();
+        move |_| {
+            topics.update(|ts| ts.retain(|t| t.id != id));
+        }
     };
+
+    let topic_name = topic.name.clone();
+    let event_count = topic.events.len();
+    let mut display_events = topic.events.clone();
+    display_events.reverse(); // newest first
 
     view! {
         <div class="topic-card">
             <div class="topic-header">
                 <div class="topic-title">
-                    <h2>{move || topic.get().name}</h2>
+                    <h2>{topic_name}</h2>
                     <span class="event-count">
-                        {move || {
-                            let count = topic.get().events.len();
-                            if count == 1 { "1 event".to_string() } else { format!("{} events", count) }
+                        {if event_count == 1 {
+                            "1 event".to_string()
+                        } else {
+                            format!("{} events", event_count)
                         }}
                     </span>
                 </div>
                 <div class="topic-actions">
-                    <button class="btn btn-primary" on:click=add_event>
-                        "+ Add"
-                    </button>
+                    <button class="btn btn-primary" on:click=add_event>"+ Add"</button>
                     <button
                         class="btn btn-ghost"
                         on:click=move |_| set_expanded.update(|e| *e = !*e)
@@ -133,26 +124,26 @@ fn TopicCard(topic_id: String, topics: RwSignal<Vec<Topic>>) -> impl IntoView {
             </div>
             <Show when=move || expanded.get()>
                 <ul class="event-list">
-                    {move || {
-                        let mut events = topic.get().events;
-                        events.reverse();
-                        if events.is_empty() {
-                            view! {
-                                <li class="event-empty">"No events yet — press \"+ Add\" to log one."</li>
-                            }.into_view()
-                        } else {
-                            events
-                                .into_iter()
-                                .map(|event| {
-                                    view! {
-                                        <li class="event-item">
-                                            <span class="event-icon">"🕐"</span>
-                                            {event.timestamp}
-                                        </li>
-                                    }
-                                })
-                                .collect_view()
-                        }
+                    {if display_events.is_empty() {
+                        view! {
+                            <li class="event-empty">
+                                "No events yet — press \"+ Add\" to log one."
+                            </li>
+                        }.into_any()
+                    } else {
+                        display_events
+                            .iter()
+                            .map(|ev| {
+                                let ts = ev.timestamp.clone();
+                                view! {
+                                    <li class="event-item">
+                                        <span class="event-icon">"🕐"</span>
+                                        {ts}
+                                    </li>
+                                }
+                            })
+                            .collect_view()
+                            .into_any()
                     }}
                 </ul>
             </Show>
@@ -162,15 +153,18 @@ fn TopicCard(topic_id: String, topics: RwSignal<Vec<Topic>>) -> impl IntoView {
 
 #[component]
 fn App() -> impl IntoView {
-    let topics = create_rw_signal(load_topics());
-    let (new_name, set_new_name) = create_signal(String::new());
+    let topics: RwSignal<Vec<Topic>> = RwSignal::new(load_topics());
+    let (new_name, set_new_name) = signal(String::new());
 
     // Persist to localStorage whenever topics change
-    create_effect(move |_| {
+    Effect::new(move |_| {
         save_topics(&topics.get());
     });
 
-    let add_topic = move |_| {
+    provide_context(topics);
+
+    let add_topic = move |ev: leptos::ev::SubmitEvent| {
+        ev.prevent_default();
         let name = new_name.get().trim().to_string();
         if !name.is_empty() {
             topics.update(|ts| {
@@ -184,12 +178,6 @@ fn App() -> impl IntoView {
         }
     };
 
-    let handle_keydown = move |e: web_sys::KeyboardEvent| {
-        if e.key() == "Enter" {
-            add_topic(web_sys::MouseEvent::new("click").unwrap());
-        }
-    };
-
     view! {
         <div class="app">
             <header class="app-header">
@@ -198,22 +186,19 @@ fn App() -> impl IntoView {
             </header>
 
             <main class="app-main">
-                // ── Add topic form ──────────────────────────────────────────
-                <div class="add-topic-form">
+                // ── Add topic form ──────────────────────────────────────
+                <form class="add-topic-form" on:submit=add_topic>
                     <input
                         class="topic-input"
                         type="text"
                         placeholder="New topic (e.g. standing up, water…)"
                         prop:value=new_name
                         on:input=move |e| set_new_name.set(event_target_value(&e))
-                        on:keydown=handle_keydown
                     />
-                    <button class="btn btn-add" on:click=add_topic>
-                        "Add Topic"
-                    </button>
-                </div>
+                    <button class="btn btn-add" type="submit">"Add Topic"</button>
+                </form>
 
-                // ── Topic cards ─────────────────────────────────────────────
+                // ── Topic list ──────────────────────────────────────────
                 <div class="topic-list">
                     <Show
                         when=move || topics.get().is_empty()
@@ -221,10 +206,7 @@ fn App() -> impl IntoView {
                             <For
                                 each=move || topics.get()
                                 key=|t| t.id.clone()
-                                children=move |topic| {
-                                    let id = topic.id.clone();
-                                    view! { <TopicCard topic_id=id topics=topics /> }
-                                }
+                                children=|topic| view! { <TopicCard topic=topic /> }
                             />
                         }
                     >
@@ -240,5 +222,6 @@ fn App() -> impl IntoView {
 }
 
 fn main() {
-    mount_to_body(App);
+    console_error_panic_hook::set_once();
+    leptos::mount::mount_to_body(|| view! { <App /> });
 }

@@ -1,17 +1,17 @@
 const CACHE_NAME = 'event-tracker-v1';
 
-// Pre-cache the shell
+// Pre-cache the app shell on install
 self.addEventListener('install', function(event) {
   event.waitUntil(
     caches.open(CACHE_NAME).then(function(cache) {
-      return cache.addAll(['/']);
+      return cache.addAll(['/', '/index.html', '/manifest.json']);
     })
   );
   self.skipWaiting();
 });
 
+// Remove old caches on activate
 self.addEventListener('activate', function(event) {
-  // Remove old caches
   event.waitUntil(
     caches.keys().then(function(cacheNames) {
       return Promise.all(
@@ -19,36 +19,51 @@ self.addEventListener('activate', function(event) {
           .filter(function(name) { return name !== CACHE_NAME; })
           .map(function(name) { return caches.delete(name); })
       );
-    }).then(function() {
-      return self.clients.claim();
-    })
+    }).then(function() { return self.clients.claim(); })
   );
 });
 
-// Cache-first, falling back to network and caching the response
 self.addEventListener('fetch', function(event) {
-  // Only handle GET requests
   if (event.request.method !== 'GET') return;
 
-  event.respondWith(
-    caches.match(event.request).then(function(cached) {
-      if (cached) return cached;
+  var url = new URL(event.request.url);
+  // Trunk hashes .wasm and .js filenames — use network-first for these
+  var isHashedAsset = url.pathname.endsWith('.wasm') ||
+                      (url.pathname.endsWith('.js') && !url.pathname.endsWith('sw.js'));
 
-      return fetch(event.request).then(function(response) {
-        // Cache successful responses (not opaque/error)
-        if (response && response.status === 200 && response.type === 'basic') {
-          var responseClone = response.clone();
-          caches.open(CACHE_NAME).then(function(cache) {
-            cache.put(event.request, responseClone);
-          });
-        }
+  if (isHashedAsset) {
+    // Network-first: update cache on each successful fetch
+    event.respondWith(
+      fetch(event.request).then(function(response) {
+        var clone = response.clone();
+        caches.open(CACHE_NAME).then(function(cache) {
+          cache.put(event.request, clone);
+        });
         return response;
       }).catch(function() {
-        // Offline fallback for navigation requests
-        if (event.request.mode === 'navigate') {
-          return caches.match('/');
-        }
-      });
-    })
-  );
+        return caches.match(event.request);
+      })
+    );
+  } else {
+    // Cache-first for HTML/CSS/manifest/icons
+    event.respondWith(
+      caches.match(event.request).then(function(cached) {
+        if (cached) return cached;
+        return fetch(event.request).then(function(response) {
+          if (response && response.status === 200) {
+            var clone = response.clone();
+            caches.open(CACHE_NAME).then(function(cache) {
+              cache.put(event.request, clone);
+            });
+          }
+          return response;
+        }).catch(function() {
+          // Offline fallback for navigation
+          if (event.request.mode === 'navigate') {
+            return caches.match('/');
+          }
+        });
+      })
+    );
+  }
 });
