@@ -7,6 +7,10 @@ use web_sys::window;
 
 const STORAGE_KEY: &str = "event_tracker_v1";
 
+// Newtype wrappers so Leptos context lookup never confuses two RwSignal<bool>.
+#[derive(Clone, Copy)] struct Editing(RwSignal<bool>);
+#[derive(Clone, Copy)] struct ShowDetail(RwSignal<bool>);
+
 // ─── Data model ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -160,8 +164,8 @@ fn export_topic(name: &str, events: &[TrackedEvent]) {
 #[component]
 fn TopicCard(topic_id: String) -> impl IntoView {
     let topics      = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
-    let editing     = use_context::<RwSignal<bool>>().expect("editing context");
-    let show_detail = use_context::<RwSignal<bool>>().expect("show_detail context");
+    let editing     = use_context::<Editing>().expect("editing context").0;
+    let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
     let tid = StoredValue::new(topic_id);
@@ -229,7 +233,7 @@ fn TopicCard(topic_id: String) -> impl IntoView {
 #[component]
 fn TopicDetail() -> impl IntoView {
     let topics      = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
-    let show_detail = use_context::<RwSignal<bool>>().expect("show_detail context");
+    let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
     let go_back = move |_: leptos::ev::MouseEvent| { show_detail.set(false); };
@@ -349,8 +353,8 @@ fn App() -> impl IntoView {
     Effect::new(move |_| { save_topics(&topics.get()); });
 
     provide_context(topics);
-    provide_context(editing);
-    provide_context(show_detail);
+    provide_context(Editing(editing));
+    provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
 
     let on_import = move |ev: leptos::ev::Event| {
