@@ -237,7 +237,6 @@ fn App() -> impl IntoView {
                             placeholder="New topic…"
                             prop:value=new_name
                             on:input=move |e| set_new_name.set(event_target_value(&e))
-                            attr:autofocus=true
                         />
                         <button class="btn btn-add" type="submit">"Add"</button>
                     </form>
