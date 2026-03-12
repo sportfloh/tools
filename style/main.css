@@ -271,13 +271,13 @@ html, body {
 
 /* Blue circle "+" to add an event */
 .btn-add-event {
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   background: var(--color-primary);
   color: white;
   border: none;
-  font-size: 1.35rem;
+  font-size: 1.6rem;
   font-weight: 300;
   line-height: 1;
   cursor: pointer;
