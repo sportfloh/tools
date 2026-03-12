@@ -68,6 +68,7 @@ fn new_id() -> String {
 #[component]
 fn TopicCard(topic_id: String) -> impl IntoView {
     let topics = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
+    let editing = use_context::<RwSignal<bool>>().expect("editing context");
     let (expanded, set_expanded) = signal(false);
 
     // StoredValue is Copy, so a single tid can be captured by every closure,
@@ -105,7 +106,15 @@ fn TopicCard(topic_id: String) -> impl IntoView {
     view! {
         <div class="topic-card">
             <div class="topic-header">
-                <div class="topic-title">
+                <Show when=move || editing.get()>
+                    <button class="btn-delete-topic" on:click=delete_topic title="Delete topic">
+                        "−"
+                    </button>
+                </Show>
+                <div
+                    class="topic-title"
+                    on:click=move |_| set_expanded.update(|e| *e = !*e)
+                >
                     <h2>{topic_name}</h2>
                     <span class="event-count">
                         {move || {
@@ -115,15 +124,12 @@ fn TopicCard(topic_id: String) -> impl IntoView {
                     </span>
                 </div>
                 <div class="topic-actions">
-                    <button class="btn btn-primary" on:click=add_event>"+ Add"</button>
+                    <button class="btn-add-event" on:click=add_event title="Add event">"+"</button>
                     <button
-                        class="btn btn-ghost"
+                        class="btn-chevron"
                         on:click=move |_| set_expanded.update(|e| *e = !*e)
                     >
-                        {move || if expanded.get() { "▲ Hide" } else { "▼ Show" }}
-                    </button>
-                    <button class="btn btn-danger" on:click=delete_topic title="Delete topic">
-                        "✕"
+                        {move || if expanded.get() { "▲" } else { "▼" }}
                     </button>
                 </div>
             </div>
@@ -159,7 +165,7 @@ fn TopicCard(topic_id: String) -> impl IntoView {
                         }
                     >
                         <li class="event-empty">
-                            "No events yet — press \"+ Add\" to log one."
+                            "No events yet — press \"+\" to log one."
                         </li>
                     </Show>
                 </ul>
@@ -172,6 +178,8 @@ fn TopicCard(topic_id: String) -> impl IntoView {
 fn App() -> impl IntoView {
     let topics: RwSignal<Vec<Topic>> = RwSignal::new(load_topics());
     let (new_name, set_new_name) = signal(String::new());
+    let editing = RwSignal::new(false);
+    let adding = RwSignal::new(false);
 
     // Persist to localStorage whenever topics change
     Effect::new(move |_| {
@@ -179,6 +187,7 @@ fn App() -> impl IntoView {
     });
 
     provide_context(topics);
+    provide_context(editing);
 
     let add_topic = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
@@ -192,29 +201,50 @@ fn App() -> impl IntoView {
                 });
             });
             set_new_name.set(String::new());
+            adding.set(false);
         }
     };
 
     view! {
         <div class="app">
             <header class="app-header">
-                <h1>"trackit"</h1>
+                <div class="header-bar">
+                    <button
+                        class="header-btn header-btn-left"
+                        on:click=move |_| editing.update(|e| *e = !*e)
+                    >
+                        {move || if editing.get() { "Done" } else { "Edit" }}
+                    </button>
+                    <h1>"trackit"</h1>
+                    <button
+                        class="header-btn header-btn-right"
+                        on:click=move |_| {
+                            let now_adding = !adding.get();
+                            adding.set(now_adding);
+                            if !now_adding {
+                                set_new_name.set(String::new());
+                            }
+                        }
+                    >
+                        {move || if adding.get() { "Cancel" } else { "+" }}
+                    </button>
+                </div>
+                <Show when=move || adding.get()>
+                    <form class="add-topic-bar" on:submit=add_topic>
+                        <input
+                            class="topic-input"
+                            type="text"
+                            placeholder="New topic…"
+                            prop:value=new_name
+                            on:input=move |e| set_new_name.set(event_target_value(&e))
+                            attr:autofocus=true
+                        />
+                        <button class="btn btn-add" type="submit">"Add"</button>
+                    </form>
+                </Show>
             </header>
 
             <main class="app-main">
-                // ── Add topic form ──────────────────────────────────────
-                <form class="add-topic-form" on:submit=add_topic>
-                    <input
-                        class="topic-input"
-                        type="text"
-                        placeholder="New topic (e.g. standing up, water…)"
-                        prop:value=new_name
-                        on:input=move |e| set_new_name.set(event_target_value(&e))
-                    />
-                    <button class="btn btn-add" type="submit">"Add Topic"</button>
-                </form>
-
-                // ── Topic list ──────────────────────────────────────────
                 <div class="topic-list">
                     <Show
                         when=move || topics.get().is_empty()
@@ -228,7 +258,7 @@ fn App() -> impl IntoView {
                     >
                         <div class="empty-state">
                             <p>"No topics yet."</p>
-                            <p>"Create one above to start tracking!"</p>
+                            <p>"Tap \"+\" to add one."</p>
                         </div>
                     </Show>
                 </div>
