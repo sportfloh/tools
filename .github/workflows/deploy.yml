@@ -8,6 +8,12 @@ on:
       - master
   workflow_dispatch:
 
+# Force all JS-based actions to run on Node.js 24.
+# Required for actions that haven't released a node24 build yet
+# (jetli/trunk-action, actions/deploy-pages, actions/upload-pages-artifact).
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   pages: write
@@ -21,7 +27,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -29,7 +35,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache Cargo registry + build
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
