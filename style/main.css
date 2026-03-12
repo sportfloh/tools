@@ -91,6 +91,12 @@ html, body {
 
 .header-btn-left  { justify-content: flex-start; }
 .header-btn-right { justify-content: flex-end; font-size: 1.5rem; font-weight: 300; }
+.header-btn-import { cursor: pointer; font-size: 1.1rem; min-width: 44px; }
+
+.header-right {
+  display: flex;
+  align-items: center;
+}
 
 /* ── Add topic bar (slides in below nav bar) ──────────────────────────────── */
 .add-topic-bar {
@@ -294,6 +300,26 @@ html, body {
 }
 .btn-add-event:hover  { background: var(--color-primary-dark); }
 .btn-add-event:active { opacity: .7; }
+
+/* Export button (↓) */
+.btn-export {
+  width: 32px;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: var(--color-muted);
+  font-size: 1rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  transition: color .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-export:hover  { color: var(--color-primary); }
+.btn-export:active { opacity: .6; }
 
 /* Chevron expand/collapse */
 .btn-chevron {
