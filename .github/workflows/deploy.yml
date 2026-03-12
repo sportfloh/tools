@@ -8,9 +8,8 @@ on:
       - master
   workflow_dispatch:
 
-# Force all JS-based actions to run on Node.js 24.
-# Required for actions that haven't released a node24 build yet
-# (jetli/trunk-action, actions/deploy-pages, actions/upload-pages-artifact).
+# Force remaining node20 actions (actions/deploy-pages has no node24 release yet)
+# to run on Node.js 24. Remove once deploy-pages ships a node24 build.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -45,17 +44,27 @@ jobs:
           restore-keys: ${{ runner.os }}-cargo-
 
       - name: Install trunk
-        uses: jetli/trunk-action@v0.5.1
-        with:
-          version: latest
+        run: |
+          curl -sL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
+            | tar xz -C ~/.cargo/bin
 
       - name: Build
         run: trunk build --release --public-url /tools/
 
+      - name: Create Pages artifact
+        run: |
+          tar --dereference --hard-dereference \
+              --directory dist/ \
+              -cvf "$RUNNER_TEMP/artifact.tar" \
+              --exclude=.git --exclude=.github \
+              .
+
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
-          path: dist/
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          if-no-files-found: error
 
   deploy:
     needs: build
