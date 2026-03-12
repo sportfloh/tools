@@ -156,23 +156,15 @@ fn export_topic(name: &str, events: &[TrackedEvent]) {
 
 // ─── Components ──────────────────────────────────────────────────────────────
 
+/// Overview row: tapping the main area tracks an event; ‹›› navigates to detail.
 #[component]
 fn TopicCard(topic_id: String) -> impl IntoView {
-    let topics = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
-    let editing = use_context::<RwSignal<bool>>().expect("editing context");
-    let (expanded, set_expanded) = signal(false);
+    let topics      = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
+    let editing     = use_context::<RwSignal<bool>>().expect("editing context");
+    let show_detail = use_context::<RwSignal<bool>>().expect("show_detail context");
+    let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
-    // StoredValue is Copy, so a single tid can be captured by every closure,
-    // including those nested inside <Show>/<For> children that require Fn.
     let tid = StoredValue::new(topic_id);
-
-    let do_export = move |_| {
-        tid.with_value(|id| topics.with(|ts| {
-            if let Some(t) = ts.iter().find(|t| t.id == *id) {
-                export_topic(&t.name, &t.events);
-            }
-        }));
-    };
 
     let add_event = move |_| {
         topics.update(|ts| {
@@ -184,98 +176,163 @@ fn TopicCard(topic_id: String) -> impl IntoView {
         });
     };
 
-    let delete_topic = move |_| {
+    let delete_topic = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
         topics.update(|ts| tid.with_value(|id| ts.retain(|t| t.id != *id)));
     };
 
+    let go_detail = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        tid.with_value(|id| {
+            detail_id.set(id.clone());
+            show_detail.set(true);
+        });
+    };
+
     let topic_name = Memo::new(move |_| {
-        tid.with_value(|id| topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.name.clone()).unwrap_or_default()))
+        tid.with_value(|id| {
+            topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.name.clone()).unwrap_or_default())
+        })
     });
 
-    // (today, week, month, total)
     let counts = Memo::new(move |_| {
-        tid.with_value(|id| topics.with(|ts| {
-            ts.iter().find(|t| t.id == *id)
+        tid.with_value(|id| {
+            topics.with(|ts| ts.iter().find(|t| t.id == *id)
                 .map(|t| event_counts(&t.events))
-                .unwrap_or((0, 0, 0, 0))
-        }))
+                .unwrap_or((0, 0, 0, 0)))
+        })
+    });
+
+    view! {
+        <div class="topic-row">
+            <Show when=move || editing.get()>
+                <button class="btn-delete-topic" on:click=delete_topic title="Delete topic">
+                    "−"
+                </button>
+            </Show>
+            <div class="topic-row-main" on:click=add_event>
+                <span class="topic-row-name">{topic_name}</span>
+                <span class="topic-row-counts">
+                    {move || {
+                        let (today, week, month, total) = counts.get();
+                        format!("{} today · {} wk · {} mo · {} total",
+                            today, week, month, total)
+                    }}
+                </span>
+            </div>
+            <button class="btn-detail" on:click=go_detail title="Details">"›"</button>
+        </div>
+    }
+}
+
+/// Full-screen detail view for one topic.
+#[component]
+fn TopicDetail() -> impl IntoView {
+    let topics      = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
+    let show_detail = use_context::<RwSignal<bool>>().expect("show_detail context");
+    let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
+
+    let go_back = move |_: leptos::ev::MouseEvent| { show_detail.set(false); };
+
+    let topic_name = Memo::new(move |_| {
+        let id = detail_id.get();
+        topics.with(|ts| ts.iter().find(|t| t.id == id).map(|t| t.name.clone()).unwrap_or_default())
     });
 
     let display_events = Memo::new(move |_| {
-        let mut evs = tid.with_value(|id| topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.events.clone()).unwrap_or_default()));
+        let id = detail_id.get();
+        let mut evs = topics.with(|ts| {
+            ts.iter().find(|t| t.id == id).map(|t| t.events.clone()).unwrap_or_default()
+        });
         evs.reverse();
         evs
     });
 
+    let do_export = move |_: leptos::ev::MouseEvent| {
+        let id = detail_id.get();
+        topics.with(|ts| {
+            if let Some(t) = ts.iter().find(|t| t.id == id) {
+                export_topic(&t.name, &t.events);
+            }
+        });
+    };
+
+    // Swipe-back gesture: start within 40 px of the left edge, drag right ≥ 50 px.
+    let touch_start_x = StoredValue::new(0.0f64);
+    let touch_start_y = StoredValue::new(0.0f64);
+
+    let on_touch_start = move |ev: web_sys::TouchEvent| {
+        if let Some(t) = ev.touches().get(0) {
+            touch_start_x.set_value(t.client_x() as f64);
+            touch_start_y.set_value(t.client_y() as f64);
+        }
+    };
+
+    let on_touch_end = move |ev: web_sys::TouchEvent| {
+        if let Some(t) = ev.changed_touches().get(0) {
+            let sx = touch_start_x.get_value();
+            let dx = t.client_x() as f64 - sx;
+            let dy = (t.client_y() as f64 - touch_start_y.get_value()).abs();
+            if sx < 40.0 && dx > 50.0 && dx > dy {
+                show_detail.set(false);
+            }
+        }
+    };
+
     view! {
-        <div class="topic-card">
-            <div class="topic-header">
-                <Show when=move || editing.get()>
-                    <button class="btn-delete-topic" on:click=delete_topic title="Delete topic">
-                        "−"
+        <div
+            class="detail-wrapper"
+            on:touchstart=on_touch_start
+            on:touchend=on_touch_end
+        >
+            <header class="app-header">
+                <div class="header-bar">
+                    <button class="header-btn header-btn-back" on:click=go_back>
+                        "‹ Back"
                     </button>
-                </Show>
-                <div
-                    class="topic-title"
-                    on:click=move |_| set_expanded.update(|e| *e = !*e)
-                >
-                    <h2>{topic_name}</h2>
-                    <span class="event-count">
-                        {move || {
-                            let (today, week, month, total) = counts.get();
-                            format!("{} today · {} wk · {} mo · {} total",
-                                today, week, month, total)
-                        }}
-                    </span>
-                </div>
-                <div class="topic-actions">
-                    <button class="btn-export" on:click=do_export title="Export to .txt">"↓"</button>
-                    <button class="btn-add-event" on:click=add_event title="Add event">"+"</button>
-                    <button
-                        class="btn-chevron"
-                        on:click=move |_| set_expanded.update(|e| *e = !*e)
-                    >
-                        {move || if expanded.get() { "▲" } else { "▼" }}
+                    <h1>{topic_name}</h1>
+                    <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">
+                        "↓"
                     </button>
                 </div>
-            </div>
-            <Show when=move || expanded.get()>
-                <ul class="event-list">
-                    <Show
-                        when=move || counts.get().3 == 0
-                        fallback=move || view! {
-                            <For
-                                each=move || display_events.get()
-                                key=|ev| ev.id.clone()
-                                children=move |ev| {
-                                    // StoredValue is Copy so delete_event can be Fn
-                                    let eid = StoredValue::new(ev.id);
-                                    let delete_event = move |_| {
-                                        topics.update(|ts| {
-                                            tid.with_value(|id| {
-                                                if let Some(t) = ts.iter_mut().find(|t| t.id == *id) {
+            </header>
+            <main class="app-main app-main--detail">
+                <div class="event-card">
+                    <ul class="event-list">
+                        <Show
+                            when=move || display_events.get().is_empty()
+                            fallback=move || view! {
+                                <For
+                                    each=move || display_events.get()
+                                    key=|ev| ev.id.clone()
+                                    children=move |ev| {
+                                        let eid = StoredValue::new(ev.id.clone());
+                                        let delete_event = move |_| {
+                                            let id = detail_id.get();
+                                            topics.update(|ts| {
+                                                if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
                                                     eid.with_value(|eid| t.events.retain(|e| e.id != *eid));
                                                 }
                                             });
-                                        });
-                                    };
-                                    view! {
-                                        <li class="event-item">
-                                            <span class="event-icon">"🕐"</span>
-                                            <span class="event-time">{format_timestamp(&ev.timestamp)}</span>
-                                            <button class="btn-delete-event" on:click=delete_event title="Delete">"✕"</button>
-                                        </li>
+                                        };
+                                        view! {
+                                            <li class="event-item">
+                                                <span class="event-icon">"🕐"</span>
+                                                <span class="event-time">{format_timestamp(&ev.timestamp)}</span>
+                                                <button class="btn-delete-event" on:click=delete_event title="Delete">"✕"</button>
+                                            </li>
+                                        }
                                     }
-                                }
-                            />
-                        }
-                    >
-                        <li class="event-empty">
-                            "No events yet — press \"+\" to log one."
-                        </li>
-                    </Show>
-                </ul>
-            </Show>
+                                />
+                            }
+                        >
+                            <li class="event-empty">
+                                "No events yet — tap the topic row to log one."
+                            </li>
+                        </Show>
+                    </ul>
+                </div>
+            </main>
         </div>
     }
 }
@@ -284,16 +341,17 @@ fn TopicCard(topic_id: String) -> impl IntoView {
 fn App() -> impl IntoView {
     let topics: RwSignal<Vec<Topic>> = RwSignal::new(load_topics());
     let (new_name, set_new_name) = signal(String::new());
-    let editing = RwSignal::new(false);
-    let adding = RwSignal::new(false);
+    let editing     = RwSignal::new(false);
+    let adding      = RwSignal::new(false);
+    let show_detail: RwSignal<bool>   = RwSignal::new(false);
+    let detail_id:   RwSignal<String> = RwSignal::new(String::new());
 
-    // Persist to localStorage whenever topics change
-    Effect::new(move |_| {
-        save_topics(&topics.get());
-    });
+    Effect::new(move |_| { save_topics(&topics.get()); });
 
     provide_context(topics);
     provide_context(editing);
+    provide_context(show_detail);
+    provide_context(detail_id);
 
     let on_import = move |ev: leptos::ev::Event| {
         let input: web_sys::HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
@@ -336,11 +394,7 @@ fn App() -> impl IntoView {
         let name = new_name.get().trim().to_string();
         if !name.is_empty() {
             topics.update(|ts| {
-                ts.push(Topic {
-                    id: new_id(),
-                    name,
-                    events: Vec::new(),
-                });
+                ts.push(Topic { id: new_id(), name, events: Vec::new() });
             });
             set_new_name.set(String::new());
             adding.set(false);
@@ -349,67 +403,78 @@ fn App() -> impl IntoView {
 
     view! {
         <div class="app">
-            <header class="app-header">
-                <div class="header-bar">
-                    <button
-                        class="header-btn header-btn-left"
-                        on:click=move |_| editing.update(|e| *e = !*e)
-                    >
-                        {move || if editing.get() { "Done" } else { "Edit" }}
-                    </button>
-                    <h1>"trackit"</h1>
-                    <div class="header-right">
-                        <label class="header-btn header-btn-import" title="Import from .txt">
-                            "↑"
-                            <input type="file" accept=".txt" style="display:none" on:change=on_import />
-                        </label>
+            // ── Overview screen ───────────────────────────────────────────────
+            <div
+                class="screen screen-overview"
+                class:pushed=move || show_detail.get()
+            >
+                <header class="app-header">
+                    <div class="header-bar">
                         <button
-                            class="header-btn header-btn-right"
-                            on:click=move |_| {
-                                let now_adding = !adding.get();
-                                adding.set(now_adding);
-                                if !now_adding {
-                                    set_new_name.set(String::new());
+                            class="header-btn header-btn-left"
+                            on:click=move |_| editing.update(|e| *e = !*e)
+                        >
+                            {move || if editing.get() { "Done" } else { "Edit" }}
+                        </button>
+                        <h1>"trackit"</h1>
+                        <div class="header-right">
+                            <label class="header-btn header-btn-import" title="Import from .txt">
+                                "↑"
+                                <input type="file" accept=".txt" style="display:none" on:change=on_import />
+                            </label>
+                            <button
+                                class="header-btn header-btn-right"
+                                on:click=move |_| {
+                                    let now_adding = !adding.get();
+                                    adding.set(now_adding);
+                                    if !now_adding { set_new_name.set(String::new()); }
                                 }
+                            >
+                                {move || if adding.get() { "Cancel" } else { "+" }}
+                            </button>
+                        </div>
+                    </div>
+                    <Show when=move || adding.get()>
+                        <form class="add-topic-bar" on:submit=add_topic>
+                            <input
+                                class="topic-input"
+                                type="text"
+                                placeholder="New topic…"
+                                prop:value=new_name
+                                on:input=move |e| set_new_name.set(event_target_value(&e))
+                            />
+                            <button class="btn btn-add" type="submit">"Add"</button>
+                        </form>
+                    </Show>
+                </header>
+                <main class="app-main">
+                    <div class="topic-list">
+                        <Show
+                            when=move || topics.get().is_empty()
+                            fallback=move || view! {
+                                <For
+                                    each=move || topics.get()
+                                    key=|t| t.id.clone()
+                                    children=|t| view! { <TopicCard topic_id=t.id /> }
+                                />
                             }
                         >
-                            {move || if adding.get() { "Cancel" } else { "+" }}
-                        </button>
+                            <div class="empty-state">
+                                <p>"No topics yet."</p>
+                                <p>"Tap \"+\" to add one."</p>
+                            </div>
+                        </Show>
                     </div>
-                </div>
-                <Show when=move || adding.get()>
-                    <form class="add-topic-bar" on:submit=add_topic>
-                        <input
-                            class="topic-input"
-                            type="text"
-                            placeholder="New topic…"
-                            prop:value=new_name
-                            on:input=move |e| set_new_name.set(event_target_value(&e))
-                        />
-                        <button class="btn btn-add" type="submit">"Add"</button>
-                    </form>
-                </Show>
-            </header>
+                </main>
+            </div>
 
-            <main class="app-main">
-                <div class="topic-list">
-                    <Show
-                        when=move || topics.get().is_empty()
-                        fallback=move || view! {
-                            <For
-                                each=move || topics.get()
-                                key=|t| t.id.clone()
-                                children=|topic| view! { <TopicCard topic_id=topic.id /> }
-                            />
-                        }
-                    >
-                        <div class="empty-state">
-                            <p>"No topics yet."</p>
-                            <p>"Tap \"+\" to add one."</p>
-                        </div>
-                    </Show>
-                </div>
-            </main>
+            // ── Detail screen ─────────────────────────────────────────────────
+            <div
+                class="screen screen-detail"
+                class:active=move || show_detail.get()
+            >
+                <TopicDetail />
+            </div>
         </div>
     }
 }

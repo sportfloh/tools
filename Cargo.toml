@@ -15,6 +15,7 @@ web-sys = { version = "0.3.83", features = [
     "Document", "HtmlElement",
     "HtmlAnchorElement", "HtmlInputElement",
     "FileReader", "File", "FileList",
+    "TouchEvent", "Touch", "TouchList",
 ] }
 console_error_panic_hook = "0.1.7"
 
