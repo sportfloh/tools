@@ -61,14 +61,13 @@ fn now_timestamp() -> String {
 fn format_timestamp(iso: &str) -> String {
     let d = js_sys::Date::new(&JsValue::from_str(iso));
     format!(
-        "{:02}.{:02}.{} - {:02}:{:02}:{:02}.{:03}000",
+        "{:02}.{:02}.{} - {:02}:{:02}:{:02}",
         d.get_date(),
         d.get_month() + 1,
         d.get_full_year(),
         d.get_hours(),
         d.get_minutes(),
         d.get_seconds(),
-        d.get_milliseconds() as u32,
     )
 }
 
