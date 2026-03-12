@@ -58,6 +58,20 @@ fn now_timestamp() -> String {
         .unwrap_or_default()
 }
 
+fn format_timestamp(iso: &str) -> String {
+    let d = js_sys::Date::new(&JsValue::from_str(iso));
+    format!(
+        "{:02}.{:02}.{} - {:02}:{:02}:{:02}.{:03}000",
+        d.get_date(),
+        d.get_month() + 1,
+        d.get_full_year(),
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds(),
+        d.get_milliseconds() as u32,
+    )
+}
+
 fn new_id() -> String {
     let ts = js_sys::Date::now() as u64;
     let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
@@ -190,7 +204,7 @@ fn TopicCard(topic_id: String) -> impl IntoView {
                                     view! {
                                         <li class="event-item">
                                             <span class="event-icon">"🕐"</span>
-                                            <span class="event-time">{ev.timestamp}</span>
+                                            <span class="event-time">{format_timestamp(&ev.timestamp)}</span>
                                             <button class="btn-delete-event" on:click=delete_event title="Delete">"✕"</button>
                                         </li>
                                     }
