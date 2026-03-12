@@ -227,10 +227,14 @@ html, body {
 }
 
 .event-count {
-  font-size: .78rem;
+  font-size: .75rem;
   color: var(--color-muted);
-  margin-top: 1px;
+  margin-top: 2px;
   display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ── Topic action buttons ─────────────────────────────────────────────────── */

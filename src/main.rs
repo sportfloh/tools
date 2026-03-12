@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen::JsValue;
 use web_sys::window;
 
 const STORAGE_KEY: &str = "event_tracker_v1";
@@ -63,6 +64,33 @@ fn new_id() -> String {
     format!("{}-{}", ts, rand)
 }
 
+// Returns (today, week, month, total) counts for a slice of events.
+fn event_counts(events: &[TrackedEvent]) -> (usize, usize, usize, usize) {
+    let now = js_sys::Date::new_0();
+    let now_ms = js_sys::Date::now();
+    let (cy, cm, cd) = (now.get_full_year(), now.get_month(), now.get_date());
+    let week_ms = 7.0 * 24.0 * 3600.0 * 1000.0;
+
+    let mut today = 0usize;
+    let mut week  = 0usize;
+    let mut month = 0usize;
+
+    for ev in events {
+        let d = js_sys::Date::new(&JsValue::from_str(&ev.timestamp));
+        let ev_ms = d.get_time();
+        if d.get_full_year() == cy && d.get_month() == cm && d.get_date() == cd {
+            today += 1;
+        }
+        if now_ms - ev_ms < week_ms {
+            week += 1;
+        }
+        if d.get_full_year() == cy && d.get_month() == cm {
+            month += 1;
+        }
+    }
+    (today, week, month, events.len())
+}
+
 // ─── Components ──────────────────────────────────────────────────────────────
 
 #[component]
@@ -93,8 +121,13 @@ fn TopicCard(topic_id: String) -> impl IntoView {
         tid.with_value(|id| topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.name.clone()).unwrap_or_default()))
     });
 
-    let event_count = Memo::new(move |_| {
-        tid.with_value(|id| topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.events.len()).unwrap_or(0)))
+    // (today, week, month, total)
+    let counts = Memo::new(move |_| {
+        tid.with_value(|id| topics.with(|ts| {
+            ts.iter().find(|t| t.id == *id)
+                .map(|t| event_counts(&t.events))
+                .unwrap_or((0, 0, 0, 0))
+        }))
     });
 
     let display_events = Memo::new(move |_| {
@@ -118,8 +151,9 @@ fn TopicCard(topic_id: String) -> impl IntoView {
                     <h2>{topic_name}</h2>
                     <span class="event-count">
                         {move || {
-                            let count = event_count.get();
-                            if count == 1 { "1 event".to_string() } else { format!("{} events", count) }
+                            let (today, week, month, total) = counts.get();
+                            format!("{} today · {} wk · {} mo · {} total",
+                                today, week, month, total)
                         }}
                     </span>
                 </div>
@@ -136,7 +170,7 @@ fn TopicCard(topic_id: String) -> impl IntoView {
             <Show when=move || expanded.get()>
                 <ul class="event-list">
                     <Show
-                        when=move || event_count.get() == 0
+                        when=move || counts.get().3 == 0
                         fallback=move || view! {
                             <For
                                 each=move || display_events.get()
