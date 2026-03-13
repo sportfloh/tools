@@ -331,11 +331,11 @@ fn TopicDetail() -> impl IntoView {
                     </button>
                     <h1>{topic_name}</h1>
                     <div class="header-right">
-                        <button class="header-btn header-btn-right" on:click=open_add_modal title="Log event manually">
-                            "+"
-                        </button>
                         <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">
                             "↓"
+                        </button>
+                        <button class="header-btn header-btn-right" on:click=open_add_modal title="Log event manually">
+                            "+"
                         </button>
                     </div>
                 </div>
