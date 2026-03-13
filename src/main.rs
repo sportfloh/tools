@@ -9,9 +9,15 @@ use web_sys::window;
 
 const STORAGE_KEY: &str = "event_tracker_v1";
 
-// Newtype wrappers so Leptos context lookup never confuses two RwSignal<bool>.
+// Newtype wrappers so Leptos context lookup never confuses same-type signals.
 #[derive(Clone, Copy)] struct Editing(RwSignal<bool>);
 #[derive(Clone, Copy)] struct ShowDetail(RwSignal<bool>);
+
+// Per-topic reactive signal list.  The outer signal changes only when topics
+// are added or removed; each inner RwSignal<Topic> changes only when that
+// topic's own data changes.  This means TopicCard memos re-run only for
+// their own topic, not for every other topic that receives an event.
+type TopicList = RwSignal<Vec<RwSignal<Topic>>>;
 
 // ─── Data model ──────────────────────────────────────────────────────────────
 
@@ -19,9 +25,8 @@ const STORAGE_KEY: &str = "event_tracker_v1";
 struct TrackedEvent {
     id: String,
     timestamp: String,
-    /// Unix epoch in milliseconds (local wall-clock time).
-    /// Added later; #[serde(default)] lets old stored records deserialize with 0.0,
-    /// which load_topics() then backfills from the ISO timestamp string.
+    /// Unix epoch in milliseconds.  #[serde(default)] lets records written
+    /// before this field existed deserialise with 0.0; load_topics() backfills.
     #[serde(default)]
     timestamp_ms: f64,
 }
@@ -194,52 +199,42 @@ fn export_topic(name: &str, events: &[TrackedEvent]) {
 
 // ─── Components ──────────────────────────────────────────────────────────────
 
-/// Overview row: tapping the main area tracks an event; ‹›› navigates to detail.
+/// Overview row: tapping the main area tracks an event; › navigates to detail.
+/// Receives its own RwSignal<Topic> — memos here re-run only when THIS topic
+/// changes, not when any other topic receives an event.
 #[component]
-fn TopicCard(topic_id: String) -> impl IntoView {
-    let topics      = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
+fn TopicCard(topic_signal: RwSignal<Topic>) -> impl IntoView {
+    let topic_list  = use_context::<TopicList>().expect("topic_list context");
     let editing     = use_context::<Editing>().expect("editing context").0;
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
-    let tid = StoredValue::new(topic_id);
-
     let add_event = move |_| {
-        topics.update(|ts| {
-            tid.with_value(|id| {
-                if let Some(t) = ts.iter_mut().find(|t| t.id == *id) {
-                    t.events.push(TrackedEvent { id: new_id(), timestamp: now_timestamp(), timestamp_ms: js_sys::Date::now() });
-                }
+        topic_signal.update(|t| {
+            t.events.push(TrackedEvent {
+                id: new_id(),
+                timestamp: now_timestamp(),
+                timestamp_ms: js_sys::Date::now(),
             });
         });
     };
 
     let delete_topic = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
-        topics.update(|ts| tid.with_value(|id| ts.retain(|t| t.id != *id)));
+        let id = topic_signal.with_untracked(|t| t.id.clone());
+        topic_list.update(|rows| rows.retain(|s| s.with_untracked(|t| t.id != id)));
     };
 
     let go_detail = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
-        tid.with_value(|id| {
-            detail_id.set(id.clone());
-            show_detail.set(true);
-        });
+        let id = topic_signal.with_untracked(|t| t.id.clone());
+        detail_id.set(id);
+        show_detail.set(true);
     };
 
-    let topic_name = Memo::new(move |_| {
-        tid.with_value(|id| {
-            topics.with(|ts| ts.iter().find(|t| t.id == *id).map(|t| t.name.clone()).unwrap_or_default())
-        })
-    });
-
-    let counts = Memo::new(move |_| {
-        tid.with_value(|id| {
-            topics.with(|ts| ts.iter().find(|t| t.id == *id)
-                .map(|t| event_counts(&t.events))
-                .unwrap_or((0, 0, 0, 0)))
-        })
-    });
+    // These memos subscribe only to topic_signal, not to any other topic.
+    let topic_name = Memo::new(move |_| topic_signal.with(|t| t.name.clone()));
+    let counts     = Memo::new(move |_| topic_signal.with(|t| event_counts(&t.events)));
 
     view! {
         <div class="topic-row">
@@ -266,7 +261,7 @@ fn TopicCard(topic_id: String) -> impl IntoView {
 /// Full-screen detail view for one topic.
 #[component]
 fn TopicDetail() -> impl IntoView {
-    let topics      = use_context::<RwSignal<Vec<Topic>>>().expect("topics context");
+    let topic_list  = use_context::<TopicList>().expect("topic_list context");
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
@@ -276,27 +271,38 @@ fn TopicDetail() -> impl IntoView {
 
     let go_back = move |_: leptos::ev::MouseEvent| { show_detail.set(false); };
 
-    let topic_name = Memo::new(move |_| {
+    // Finds the inner signal for the currently-viewed topic.
+    // Uses with_untracked on inner signals during the search so we don't
+    // subscribe to every topic just to find the right one.
+    let current_sig = Memo::new(move |_| {
         let id = detail_id.get();
-        topics.with(|ts| ts.iter().find(|t| t.id == id).map(|t| t.name.clone()).unwrap_or_default())
+        topic_list.with(|rows| {
+            rows.iter()
+                .find(|s| s.with_untracked(|t| t.id == id))
+                .copied()
+        })
+    });
+
+    // These memos subscribe to current_sig (re-run on topic switch) AND to the
+    // inner signal (re-run when THIS topic's data changes, not other topics).
+    let topic_name = Memo::new(move |_| {
+        current_sig.get()
+            .map(|sig| sig.with(|t| t.name.clone()))
+            .unwrap_or_default()
     });
 
     let display_events = Memo::new(move |_| {
-        let id = detail_id.get();
-        let mut evs = topics.with(|ts| {
-            ts.iter().find(|t| t.id == id).map(|t| t.events.clone()).unwrap_or_default()
-        });
+        let mut evs = current_sig.get()
+            .map(|sig| sig.with(|t| t.events.clone()))
+            .unwrap_or_default();
         evs.reverse();
         evs
     });
 
     let do_export = move |_: leptos::ev::MouseEvent| {
-        let id = detail_id.get();
-        topics.with(|ts| {
-            if let Some(t) = ts.iter().find(|t| t.id == id) {
-                export_topic(&t.name, &t.events);
-            }
-        });
+        if let Some(sig) = current_sig.get_untracked() {
+            sig.with_untracked(|t| export_topic(&t.name, &t.events));
+        }
     };
 
     let open_add_modal = move |_: leptos::ev::MouseEvent| {
@@ -312,12 +318,11 @@ fn TopicDetail() -> impl IntoView {
         if !d.get_time().is_nan() {
             let iso = d.to_iso_string().as_string().unwrap_or_default();
             let ms  = d.get_time();
-            let id = detail_id.get();
-            topics.update(|ts| {
-                if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
+            if let Some(sig) = current_sig.get_untracked() {
+                sig.update(|t| {
                     t.events.push(TrackedEvent { id: new_id(), timestamp: iso, timestamp_ms: ms });
-                }
-            });
+                });
+            }
         }
         show_add_modal.set(false);
     };
@@ -399,12 +404,11 @@ fn TopicDetail() -> impl IntoView {
                                         };
                                         let delete_event = move |me: leptos::ev::MouseEvent| {
                                             me.stop_propagation();
-                                            let id = detail_id.get();
-                                            topics.update(|ts| {
-                                                if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
+                                            if let Some(sig) = current_sig.get_untracked() {
+                                                sig.update(|t| {
                                                     eid.with_value(|eid| t.events.retain(|e| e.id != *eid));
-                                                }
-                                            });
+                                                });
+                                            }
                                             swiped_id.set(None);
                                         };
                                         let is_swiped = move || {
@@ -468,37 +472,41 @@ fn TopicDetail() -> impl IntoView {
 
 #[component]
 fn App() -> impl IntoView {
-    let topics: RwSignal<Vec<Topic>> = RwSignal::new(load_topics());
+    // Create per-topic signals: the outer list changes only on add/remove,
+    // each inner RwSignal<Topic> changes only for that topic's own data.
+    let topic_list: TopicList = RwSignal::new(
+        load_topics().into_iter().map(RwSignal::new).collect()
+    );
+
     let (new_name, set_new_name) = signal(String::new());
     let editing     = RwSignal::new(false);
     let adding      = RwSignal::new(false);
     let show_detail: RwSignal<bool>   = RwSignal::new(false);
     let detail_id:   RwSignal<String> = RwSignal::new(String::new());
 
-    // Debounced save: coalesce rapid updates into a single localStorage write
-    // 500 ms after the last change. Uses a JS timeout handle tracked in an Rc<Cell>.
+    // Debounced save: coalesce rapid updates into one localStorage write 500 ms
+    // after the last change.  Reads all inner signals so it re-runs on any change.
     let save_timer: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
     Effect::new(move |_| {
-        let snap = topics.get();
-        let win  = window().unwrap();
-        // Cancel any pending save
+        let snap: Vec<Topic> = topic_list.with(|rows| rows.iter().map(|s| s.get()).collect());
+        let win = window().unwrap();
         let prev = save_timer.get();
         if prev >= 0 { win.clear_timeout_with_handle(prev); }
         let timer_clone = save_timer.clone();
-        // Closure::once_into_js transfers ownership to JS; no Rust-side drop needed.
         let cb = Closure::once_into_js(move || {
             save_topics(&snap);
             timer_clone.set(-1);
         });
-        match win.set_timeout_with_callback_and_timeout_and_arguments_0(
-            cb.unchecked_ref(), 500
-        ) {
+        match win.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 500) {
             Ok(id) => save_timer.set(id),
-            Err(_) => save_topics(&topics.get()), // fallback: save synchronously
+            Err(_) => {
+                let snap2: Vec<Topic> = topic_list.with(|rows| rows.iter().map(|s| s.get_untracked()).collect());
+                save_topics(&snap2);
+            }
         }
     });
 
-    provide_context(topics);
+    provide_context(topic_list);
     provide_context(Editing(editing));
     provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
@@ -520,17 +528,26 @@ fn App() -> impl IntoView {
             let new_events: Vec<TrackedEvent> = text.lines()
                 .filter_map(parse_import_line)
                 .collect();
-            topics.update(|ts| {
-                if let Some(t) = ts.iter_mut().find(|t| t.name == topic_name) {
+
+            // Find existing topic by name (untracked search to avoid subscriptions).
+            let existing_sig = topic_list.with_untracked(|rows| {
+                rows.iter()
+                    .find(|s| s.with_untracked(|t| t.name == topic_name))
+                    .copied()
+            });
+
+            if let Some(sig) = existing_sig {
+                sig.update(|t| {
                     for ev in new_events {
                         if !t.events.iter().any(|e| e.timestamp == ev.timestamp) {
                             t.events.push(ev);
                         }
                     }
-                } else {
-                    ts.push(Topic { id: new_id(), name: topic_name, events: new_events });
-                }
-            });
+                });
+            } else {
+                let new_topic = Topic { id: new_id(), name: topic_name, events: new_events };
+                topic_list.update(|rows| rows.push(RwSignal::new(new_topic)));
+            }
         });
 
         reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
@@ -543,9 +560,8 @@ fn App() -> impl IntoView {
         ev.prevent_default();
         let name = new_name.get().trim().to_string();
         if !name.is_empty() {
-            topics.update(|ts| {
-                ts.push(Topic { id: new_id(), name, events: Vec::new() });
-            });
+            let new_topic = Topic { id: new_id(), name, events: Vec::new() };
+            topic_list.update(|rows| rows.push(RwSignal::new(new_topic)));
             set_new_name.set(String::new());
             adding.set(false);
         }
@@ -600,12 +616,12 @@ fn App() -> impl IntoView {
                 <main class="app-main">
                     <div class="topic-list">
                         <Show
-                            when=move || topics.get().is_empty()
+                            when=move || topic_list.get().is_empty()
                             fallback=move || view! {
                                 <For
-                                    each=move || topics.get()
-                                    key=|t| t.id.clone()
-                                    children=|t| view! { <TopicCard topic_id=t.id /> }
+                                    each=move || topic_list.get()
+                                    key=|sig| sig.with_untracked(|t| t.id.clone())
+                                    children=|sig| view! { <TopicCard topic_signal=sig /> }
                                 />
                             }
                         >
