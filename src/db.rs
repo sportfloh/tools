@@ -152,13 +152,13 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
         Err(_) => return,
     };
     // Delete all events for this topic
-    if let Ok(ev_store) = tx.store("events") {
-        if let Ok(index) = ev_store.index("by_topic") {
-            let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
-            if let Ok(records) = index.get_all(key_range.as_ref(), None, None, None).await {
-                for (k, _) in records {
-                    ev_store.delete(&k).await.ok();
-                }
+    if let Ok(ev_store) = tx.store("events")
+        && let Ok(index) = ev_store.index("by_topic")
+    {
+        let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
+        if let Ok(records) = index.get_all(key_range.as_ref(), None, None, None).await {
+            for (k, _) in records {
+                ev_store.delete(&k).await.ok();
             }
         }
     }
@@ -174,8 +174,8 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        add_event_idb, delete_event_idb, load_events_for_topic, load_topic_headers, open_db,
-        save_topic_header, EventRow, TopicHeader,
+        EventRow, TopicHeader, add_event_idb, delete_event_idb, load_events_for_topic,
+        load_topic_headers, open_db, save_topic_header,
     };
     use wasm_bindgen_test::*;
 
@@ -208,9 +208,11 @@ mod wasm_tests {
         let hdr = test_header("topic-idb-1", "Running");
         save_topic_header(&db, &hdr).await;
         let loaded = load_topic_headers(&db).await;
-        assert!(loaded
-            .iter()
-            .any(|h| h.id == "topic-idb-1" && h.name == "Running"));
+        assert!(
+            loaded
+                .iter()
+                .any(|h| h.id == "topic-idb-1" && h.name == "Running")
+        );
     }
 
     // IDB: add an event then retrieve it by topic
