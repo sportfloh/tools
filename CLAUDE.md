@@ -24,9 +24,30 @@ There are no tests. The pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt
 git config core.hooksPath .githooks
 ```
 
+## Source modules
+
+| File | Purpose |
+|------|---------|
+| `src/main.rs` | Entry point — mounts the Leptos app |
+| `src/app.rs` | All UI components and signal wiring |
+| `src/db.rs` | IndexedDB access via `rexie` |
+| `src/time.rs` | Timestamp helpers, count computation, import/export |
+| `src/lib.rs` | Re-exports for the `trackitlib` rlib crate |
+
+## Key dependencies
+
+| Crate | Version | Role |
+|-------|---------|------|
+| `leptos` | 0.8 (CSR) | Reactive UI framework |
+| `rexie` | 0.5 | IndexedDB async wrapper |
+| `serde` / `serde_json` | 1.0 | Serialisation |
+| `wasm-bindgen` / `js-sys` / `web-sys` | latest | WASM ↔ JS bridge |
+
+Rust edition: **2024**.
+
 ## Architecture
 
-Single-page PWA built with **Leptos** (CSR/WASM) and **Trunk**. The entire application is `src/main.rs` — there are no modules.
+Single-page PWA built with **Leptos** (CSR/WASM) and **Trunk**. Entry point is `src/main.rs`; logic is split across modules (`src/app.rs`, `src/db.rs`, etc.).
 
 ### Data layer
 
@@ -57,3 +78,17 @@ Plain-text, one timestamp per line: `YYYY-MM-DD HH:MM:SS.mmm000`. Import parses 
 ### PWA
 
 `index.html` → `manifest.json` + `public/service-worker.js` + `public/icon.svg`. Trunk copies these into `dist/` at build time (`copy-file` / `copy-dir` directives in `index.html`).
+
+## Self-Maintenance Rule
+
+After every major change, update this file to reflect the current state. Specifically:
+
+- **New module** — add a row to the "Source modules" table
+- **New dependency** — add a row to the "Key dependencies" table
+- **Architectural shift** — update the Architecture section
+- **New IDB store or index** — update the Data layer section
+- **New context value or signal type** — update the Reactive model section
+- **Build / tooling change** — update the Commands section and dependency versions
+- **Gotchas discovered** — add a "Gotchas & Pitfalls" section if one does not exist
+
+Keep this file as the single source of truth for AI sessions working on this project.
