@@ -84,11 +84,12 @@ html, body {
 
 /* ── iOS-style navigation header ─────────────────────────────────────────── */
 .app-header {
-  background: var(--color-primary);
+  background: #1c1c1e;
   color: white;
   flex-shrink: 0;
   z-index: 10;
-  box-shadow: var(--header-shadow);
+  /* Thin separator line to distinguish header from list content */
+  border-bottom: 1px solid rgba(255,255,255,.12);
   /* Respect iPhone notch / Dynamic Island */
   padding-top: env(safe-area-inset-top, 0px);
 }
