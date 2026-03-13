@@ -3,6 +3,14 @@ name = "event-tracker"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "trackitlib"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "trackit"
+path = "src/main.rs"
+
 [dependencies]
 leptos = { version = "0.8.17", features = ["csr"] }
 serde = { version = "1.0.228", features = ["derive"] }
