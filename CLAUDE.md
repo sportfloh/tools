@@ -18,11 +18,20 @@ cargo fmt
 cargo clippy --target wasm32-unknown-unknown -- -D warnings
 ```
 
-There are no tests. The pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt` then `cargo clippy`. Activate it once per clone:
+The pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt` then `cargo clippy`. Activate it once per clone:
 
 ```sh
 git config core.hooksPath .githooks
 ```
+
+## Tests
+
+There are currently **no automated tests**. The WASM-only target makes standard `cargo test` impractical for most logic; browser-side behaviour is verified manually.
+
+If tests are added in the future:
+- Pure logic (e.g. timestamp parsing in `src/time.rs`) can be unit-tested with `cargo test --lib`
+- Browser/IDB integration tests would require `wasm-pack test --headless --firefox` (or `--chrome`)
+- Add the relevant run command to the Commands section above and update the Self-Maintenance Rule below
 
 ## Source modules
 
@@ -89,6 +98,7 @@ After every major change, update this file to reflect the current state. Specifi
 - **New IDB store or index** — update the Data layer section
 - **New context value or signal type** — update the Reactive model section
 - **Build / tooling change** — update the Commands section and dependency versions
+- **Tests added or removed** — update the Tests section (count, how to run, what is covered)
 - **Gotchas discovered** — add a "Gotchas & Pitfalls" section if one does not exist
 
 Keep this file as the single source of truth for AI sessions working on this project.
