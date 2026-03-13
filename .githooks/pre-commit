@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+echo "▶ rustfmt"
+cargo fmt -- --check
+
+echo "▶ clippy"
+cargo clippy --target wasm32-unknown-unknown -- -D warnings
+
+echo "✓ all checks passed"

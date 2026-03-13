@@ -1,8 +1,8 @@
-use std::cell::RefCell;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use rexie::{Index, KeyRange, ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
@@ -12,9 +12,12 @@ const STORAGE_KEY: &str = "event_tracker_v1";
 const PAGE_SIZE: usize = 50;
 
 // Newtype wrappers so Leptos context lookup never confuses same-type signals.
-#[derive(Clone, Copy)] struct Editing(RwSignal<bool>);
-#[derive(Clone, Copy)] struct ShowDetail(RwSignal<bool>);
-#[derive(Clone, Copy)] struct DbReady(RwSignal<bool>);
+#[derive(Clone, Copy)]
+struct Editing(RwSignal<bool>);
+#[derive(Clone, Copy)]
+struct ShowDetail(RwSignal<bool>);
+#[derive(Clone, Copy)]
+struct DbReady(RwSignal<bool>);
 
 // Per-topic reactive signal list. Outer signal changes only on add/remove;
 // inner RwSignal<TopicHeader> changes only when that topic's counts change.
@@ -22,7 +25,7 @@ type TopicList = RwSignal<Vec<RwSignal<TopicHeader>>>;
 
 // Thread-local DB handle — avoids Send + Sync requirement on Rexie.
 thread_local! {
-    static DB: RefCell<Option<Rexie>> = RefCell::new(None);
+    static DB: RefCell<Option<Rexie>> = const { RefCell::new(None) };
 }
 
 fn get_db() -> Option<Rexie> {
@@ -34,20 +37,20 @@ fn get_db() -> Option<Rexie> {
 /// Lightweight header kept in reactive signals — no events Vec.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct TopicHeader {
-    id:          String,
-    name:        String,
+    id: String,
+    name: String,
     count_total: u32,
     count_today: u32,
-    count_week:  u32,
+    count_week: u32,
     count_month: u32,
 }
 
 /// Row stored in IDB "events" store.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct EventRow {
-    id:           String,
-    topic_id:     String,
-    timestamp:    String,
+    id: String,
+    topic_id: String,
+    timestamp: String,
     timestamp_ms: f64,
 }
 
@@ -61,8 +64,8 @@ struct TrackedEvent {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct Topic {
-    id:     String,
-    name:   String,
+    id: String,
+    name: String,
     events: Vec<TrackedEvent>,
 }
 
@@ -91,9 +94,13 @@ async fn load_topic_headers(db: &Rexie) -> Vec<TopicHeader> {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let records = store.get_all(None, None, None, None).await.unwrap_or_default();
+    let records = store
+        .get_all(None, None, None, None)
+        .await
+        .unwrap_or_default();
     tx.done().await.ok();
-    records.into_iter()
+    records
+        .into_iter()
         .filter_map(|(_k, v)| serde_wasm_bindgen::from_value::<TopicHeader>(v).ok())
         .collect()
 }
@@ -127,12 +134,20 @@ async fn load_events_for_topic(db: &Rexie, topic_id: &str) -> Vec<EventRow> {
         Err(_) => return Vec::new(),
     };
     let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
-    let records = index.get_all(key_range.as_ref(), None, None, None).await.unwrap_or_default();
+    let records = index
+        .get_all(key_range.as_ref(), None, None, None)
+        .await
+        .unwrap_or_default();
     tx.done().await.ok();
-    let mut rows: Vec<EventRow> = records.into_iter()
+    let mut rows: Vec<EventRow> = records
+        .into_iter()
         .filter_map(|(_k, v)| serde_wasm_bindgen::from_value::<EventRow>(v).ok())
         .collect();
-    rows.sort_by(|a, b| b.timestamp_ms.partial_cmp(&a.timestamp_ms).unwrap_or(std::cmp::Ordering::Equal));
+    rows.sort_by(|a, b| {
+        b.timestamp_ms
+            .partial_cmp(&a.timestamp_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     rows
 }
 
@@ -187,7 +202,9 @@ async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 }
 
 async fn migrate_from_localstorage(db: &Rexie) {
-    if !load_topic_headers(db).await.is_empty() { return; }
+    if !load_topic_headers(db).await.is_empty() {
+        return;
+    }
 
     let storage = match window().and_then(|w| w.local_storage().ok()).flatten() {
         Some(s) => s,
@@ -210,19 +227,19 @@ async fn migrate_from_localstorage(db: &Rexie) {
         }
         let raw_counts = event_counts_raw(&topic.events);
         let header = TopicHeader {
-            id:          topic.id.clone(),
-            name:        topic.name,
+            id: topic.id.clone(),
+            name: topic.name,
             count_total: raw_counts.3 as u32,
             count_today: raw_counts.0 as u32,
-            count_week:  raw_counts.1 as u32,
+            count_week: raw_counts.1 as u32,
             count_month: raw_counts.2 as u32,
         };
         save_topic_header(db, &header).await;
         for ev in topic.events {
             let row = EventRow {
-                id:           ev.id,
-                topic_id:     topic.id.clone(),
-                timestamp:    ev.timestamp,
+                id: ev.id,
+                topic_id: topic.id.clone(),
+                timestamp: ev.timestamp,
                 timestamp_ms: ev.timestamp_ms,
             };
             add_event_idb(db, &row).await;
@@ -234,15 +251,22 @@ async fn migrate_from_localstorage(db: &Rexie) {
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 fn now_timestamp() -> String {
-    js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
+    js_sys::Date::new_0()
+        .to_iso_string()
+        .as_string()
+        .unwrap_or_default()
 }
 
 fn now_local_datetime_str() -> String {
     let d = js_sys::Date::new_0();
     format!(
         "{}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        d.get_full_year(), d.get_month() + 1, d.get_date(),
-        d.get_hours(), d.get_minutes(), d.get_seconds(),
+        d.get_full_year(),
+        d.get_month() + 1,
+        d.get_date(),
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds(),
     )
 }
 
@@ -250,43 +274,50 @@ fn format_timestamp(iso: &str) -> String {
     let d = js_sys::Date::new(&JsValue::from_str(iso));
     format!(
         "{:02}.{:02}.{} - {:02}:{:02}:{:02}",
-        d.get_date(), d.get_month() + 1, d.get_full_year(),
-        d.get_hours(), d.get_minutes(), d.get_seconds(),
+        d.get_date(),
+        d.get_month() + 1,
+        d.get_full_year(),
+        d.get_hours(),
+        d.get_minutes(),
+        d.get_seconds(),
     )
 }
 
 fn new_id() -> String {
-    let ts   = js_sys::Date::now() as u64;
+    let ts = js_sys::Date::now() as u64;
     let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
     format!("{}-{}", ts, rand)
 }
 
 fn time_boundaries() -> (f64, f64, f64, f64, f64) {
-    let now    = js_sys::Date::new_0();
+    let now = js_sys::Date::new_0();
     let now_ms = now.get_time();
     let (cy, cm, cd) = (now.get_full_year(), now.get_month() + 1, now.get_date());
-    let today_start = js_sys::Date::new(
-        &JsValue::from_str(&format!("{}-{:02}-{:02}T00:00:00", cy, cm, cd))
-    ).get_time();
-    let today_end   = today_start + 86_400_000.0;
-    let month_start = js_sys::Date::new(
-        &JsValue::from_str(&format!("{}-{:02}-01T00:00:00", cy, cm))
-    ).get_time();
-    let week_start  = now_ms - 7.0 * 86_400_000.0;
+    let today_start = js_sys::Date::new(&JsValue::from_str(&format!(
+        "{}-{:02}-{:02}T00:00:00",
+        cy, cm, cd
+    )))
+    .get_time();
+    let today_end = today_start + 86_400_000.0;
+    let month_start =
+        js_sys::Date::new(&JsValue::from_str(&format!("{}-{:02}-01T00:00:00", cy, cm))).get_time();
+    let week_start = now_ms - 7.0 * 86_400_000.0;
     (now_ms, today_start, today_end, month_start, week_start)
 }
 
 fn event_counts_raw(events: &[TrackedEvent]) -> (usize, usize, usize, usize) {
     let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
-    events.iter().fold((0, 0, 0, events.len()), |(t, w, m, total), ev| {
-        let ms = ev.timestamp_ms;
-        (
-            t + (ms >= today_start && ms < today_end) as usize,
-            w + (ms >= week_start  && ms <= now_ms)   as usize,
-            m + (ms >= month_start)                    as usize,
-            total,
-        )
-    })
+    events
+        .iter()
+        .fold((0, 0, 0, events.len()), |(t, w, m, total), ev| {
+            let ms = ev.timestamp_ms;
+            (
+                t + (ms >= today_start && ms < today_end) as usize,
+                w + (ms >= week_start && ms <= now_ms) as usize,
+                m + (ms >= month_start) as usize,
+                total,
+            )
+        })
 }
 
 fn event_row_counts(events: &[EventRow]) -> (u32, u32, u32, u32) {
@@ -295,8 +326,8 @@ fn event_row_counts(events: &[EventRow]) -> (u32, u32, u32, u32) {
         let ms = ev.timestamp_ms;
         (
             t + (ms >= today_start && ms < today_end) as u32,
-            w + (ms >= week_start  && ms <= now_ms)   as u32,
-            m + (ms >= month_start)                    as u32,
+            w + (ms >= week_start && ms <= now_ms) as u32,
+            m + (ms >= month_start) as u32,
         )
     });
     (t, w, m, events.len() as u32)
@@ -304,19 +335,23 @@ fn event_row_counts(events: &[EventRow]) -> (u32, u32, u32, u32) {
 
 fn parse_import_line(line: &str) -> Option<EventRow> {
     let line = line.trim();
-    if line.is_empty() { return None; }
+    if line.is_empty() {
+        return None;
+    }
     let (date_part, time_part) = line.split_once(' ')?;
     let (hms, frac) = time_part.split_once('.').unwrap_or((time_part, "000"));
     let ms_str = format!("{:0<3}", frac);
     let ms_part = &ms_str[..ms_str.len().min(3)];
     let local_iso = format!("{}T{}.{}", date_part, hms, ms_part);
     let d = js_sys::Date::new(&JsValue::from_str(&local_iso));
-    if d.get_time().is_nan() { return None; }
+    if d.get_time().is_nan() {
+        return None;
+    }
     let ts_ms = d.get_time();
     Some(EventRow {
-        id:           new_id(),
-        topic_id:     String::new(), // filled by caller
-        timestamp:    d.to_iso_string().as_string()?,
+        id: new_id(),
+        topic_id: String::new(), // filled by caller
+        timestamp: d.to_iso_string().as_string()?,
         timestamp_ms: ts_ms,
     })
 }
@@ -325,20 +360,27 @@ fn export_topic(name: &str, events: &[EventRow]) {
     let mut sorted: Vec<&EventRow> = events.iter().collect();
     sorted.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
-    let content: String = sorted.iter().map(|ev| {
-        let d = js_sys::Date::new(&JsValue::from_str(&ev.timestamp));
-        format!(
-            "{}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}000\n",
-            d.get_full_year(), d.get_month() + 1, d.get_date(),
-            d.get_hours(), d.get_minutes(), d.get_seconds(),
-            d.get_milliseconds() as u32,
-        )
-    }).collect();
+    let content: String = sorted
+        .iter()
+        .map(|ev| {
+            let d = js_sys::Date::new(&JsValue::from_str(&ev.timestamp));
+            format!(
+                "{}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}000\n",
+                d.get_full_year(),
+                d.get_month() + 1,
+                d.get_date(),
+                d.get_hours(),
+                d.get_minutes(),
+                d.get_seconds(),
+                d.get_milliseconds(),
+            )
+        })
+        .collect();
 
-    let arr  = js_sys::Array::new();
+    let arr = js_sys::Array::new();
     arr.push(&JsValue::from_str(&content));
     let blob = web_sys::Blob::new_with_str_sequence(&arr).unwrap();
-    let url  = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
 
     let doc = window().unwrap().document().unwrap();
     let a: web_sys::HtmlAnchorElement = doc.create_element("a").unwrap().dyn_into().unwrap();
@@ -354,19 +396,24 @@ fn export_topic(name: &str, events: &[EventRow]) {
 
 #[component]
 fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
-    let topic_list  = use_context::<TopicList>().expect("topic_list context");
-    let db_ready    = use_context::<DbReady>().expect("db_ready context").0;
-    let editing     = use_context::<Editing>().expect("editing context").0;
+    let topic_list = use_context::<TopicList>().expect("topic_list context");
+    let db_ready = use_context::<DbReady>().expect("db_ready context").0;
+    let editing = use_context::<Editing>().expect("editing context").0;
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
-    let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
+    let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
 
     let add_event = move |_| {
         let Some(db) = get_db() else { return };
         let _ = db_ready.get_untracked(); // just to acknowledge the signal
         let topic_id = topic_signal.with_untracked(|h| h.id.clone());
-        let ts       = now_timestamp();
-        let ts_ms    = js_sys::Date::now();
-        let row = EventRow { id: new_id(), topic_id, timestamp: ts, timestamp_ms: ts_ms };
+        let ts = now_timestamp();
+        let ts_ms = js_sys::Date::now();
+        let row = EventRow {
+            id: new_id(),
+            topic_id,
+            timestamp: ts,
+            timestamp_ms: ts_ms,
+        };
         let row2 = row.clone();
         spawn_local(async move {
             add_event_idb(&db, &row2).await;
@@ -374,9 +421,15 @@ fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
             let ms = row2.timestamp_ms;
             topic_signal.update(|h| {
                 h.count_total += 1;
-                if ms >= today_start && ms < today_end  { h.count_today  += 1; }
-                if ms >= week_start  && ms <= now_ms     { h.count_week   += 1; }
-                if ms >= month_start                      { h.count_month  += 1; }
+                if ms >= today_start && ms < today_end {
+                    h.count_today += 1;
+                }
+                if ms >= week_start && ms <= now_ms {
+                    h.count_week += 1;
+                }
+                if ms >= month_start {
+                    h.count_month += 1;
+                }
             });
             save_topic_header(&db, &topic_signal.get_untracked()).await;
         });
@@ -384,10 +437,12 @@ fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
 
     let delete_topic = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
-        let id  = topic_signal.with_untracked(|h| h.id.clone());
+        let id = topic_signal.with_untracked(|h| h.id.clone());
         let id2 = id.clone();
         if let Some(db) = get_db() {
-            spawn_local(async move { delete_topic_idb(&db, &id).await; });
+            spawn_local(async move {
+                delete_topic_idb(&db, &id).await;
+            });
         }
         topic_list.update(|rows| rows.retain(|s| s.with_untracked(|h| h.id != id2)));
     };
@@ -400,9 +455,9 @@ fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     };
 
     let topic_name = Memo::new(move |_| topic_signal.with(|h| h.name.clone()));
-    let counts     = Memo::new(move |_| topic_signal.with(|h| {
-        (h.count_today, h.count_week, h.count_month, h.count_total)
-    }));
+    let counts = Memo::new(move |_| {
+        topic_signal.with(|h| (h.count_today, h.count_week, h.count_month, h.count_total))
+    });
 
     view! {
         <div class="topic-row">
@@ -428,20 +483,22 @@ fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
 
 #[component]
 fn TopicDetail() -> impl IntoView {
-    let topic_list  = use_context::<TopicList>().expect("topic_list context");
+    let topic_list = use_context::<TopicList>().expect("topic_list context");
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
-    let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
+    let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
 
-    let show_add_modal: RwSignal<bool>           = RwSignal::new(false);
-    let manual_dt:      RwSignal<String>         = RwSignal::new(String::new());
-    let swiped_id:      RwSignal<Option<String>> = RwSignal::new(None);
+    let show_add_modal: RwSignal<bool> = RwSignal::new(false);
+    let manual_dt: RwSignal<String> = RwSignal::new(String::new());
+    let swiped_id: RwSignal<Option<String>> = RwSignal::new(None);
 
-    let events:   RwSignal<Vec<EventRow>> = RwSignal::new(Vec::new());
-    let loading:  RwSignal<bool>          = RwSignal::new(false);
-    let page_end: RwSignal<usize>         = RwSignal::new(PAGE_SIZE);
-    let all_evs:  StoredValue<Vec<EventRow>> = StoredValue::new(Vec::new());
+    let events: RwSignal<Vec<EventRow>> = RwSignal::new(Vec::new());
+    let loading: RwSignal<bool> = RwSignal::new(false);
+    let page_end: RwSignal<usize> = RwSignal::new(PAGE_SIZE);
+    let all_evs: StoredValue<Vec<EventRow>> = StoredValue::new(Vec::new());
 
-    let go_back = move |_: leptos::ev::MouseEvent| { show_detail.set(false); };
+    let go_back = move |_: leptos::ev::MouseEvent| {
+        show_detail.set(false);
+    };
 
     // Find the header signal for the currently-viewed topic.
     let current_header = Memo::new(move |_| {
@@ -454,7 +511,8 @@ fn TopicDetail() -> impl IntoView {
     });
 
     let topic_name = Memo::new(move |_| {
-        current_header.get()
+        current_header
+            .get()
             .map(|sig| sig.with(|h| h.name.clone()))
             .unwrap_or_default()
     });
@@ -462,7 +520,9 @@ fn TopicDetail() -> impl IntoView {
     // Load events from IDB whenever the viewed topic changes.
     Effect::new(move |_| {
         let topic_id = detail_id.get();
-        if topic_id.is_empty() { return; }
+        if topic_id.is_empty() {
+            return;
+        }
         let Some(db) = get_db() else { return };
         events.set(Vec::new());
         all_evs.set_value(Vec::new());
@@ -470,7 +530,7 @@ fn TopicDetail() -> impl IntoView {
         loading.set(true);
         spawn_local(async move {
             let loaded = load_events_for_topic(&db, &topic_id).await;
-            let page   = loaded[..PAGE_SIZE.min(loaded.len())].to_vec();
+            let page = loaded[..PAGE_SIZE.min(loaded.len())].to_vec();
             all_evs.set_value(loaded);
             events.set(page);
             loading.set(false);
@@ -478,7 +538,7 @@ fn TopicDetail() -> impl IntoView {
     });
 
     let load_more = move |_: leptos::ev::MouseEvent| {
-        let next  = page_end.get() + PAGE_SIZE;
+        let next = page_end.get() + PAGE_SIZE;
         let slice = all_evs.with_value(|v| v[..next.min(v.len())].to_vec());
         events.set(slice);
         page_end.set(next);
@@ -491,20 +551,27 @@ fn TopicDetail() -> impl IntoView {
         all_evs.with_value(|v| export_topic(&name, v));
     };
 
-    let open_add_modal  = move |_: leptos::ev::MouseEvent| {
+    let open_add_modal = move |_: leptos::ev::MouseEvent| {
         manual_dt.set(now_local_datetime_str());
         show_add_modal.set(true);
     };
-    let close_add_modal = move |_: leptos::ev::MouseEvent| { show_add_modal.set(false); };
+    let close_add_modal = move |_: leptos::ev::MouseEvent| {
+        show_add_modal.set(false);
+    };
 
     let add_manual_event = move |_: leptos::ev::MouseEvent| {
         let dt_str = manual_dt.get();
         let d = js_sys::Date::new(&JsValue::from_str(&dt_str));
         if !d.get_time().is_nan() {
-            let iso   = d.to_iso_string().as_string().unwrap_or_default();
+            let iso = d.to_iso_string().as_string().unwrap_or_default();
             let ts_ms = d.get_time();
             let topic_id = detail_id.get_untracked();
-            let row = EventRow { id: new_id(), topic_id, timestamp: iso, timestamp_ms: ts_ms };
+            let row = EventRow {
+                id: new_id(),
+                topic_id,
+                timestamp: iso,
+                timestamp_ms: ts_ms,
+            };
             // Optimistic UI update
             events.update(|evs| evs.insert(0, row.clone()));
             all_evs.update_value(|v| v.insert(0, row.clone()));
@@ -512,14 +579,21 @@ fn TopicDetail() -> impl IntoView {
                 let row2 = row.clone();
                 spawn_local(async move {
                     add_event_idb(&db, &row2).await;
-                    let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+                    let (now_ms, today_start, today_end, month_start, week_start) =
+                        time_boundaries();
                     let ms = row2.timestamp_ms;
                     if let Some(sig) = current_header.get_untracked() {
                         sig.update(|h| {
                             h.count_total += 1;
-                            if ms >= today_start && ms < today_end  { h.count_today  += 1; }
-                            if ms >= week_start  && ms <= now_ms     { h.count_week   += 1; }
-                            if ms >= month_start                      { h.count_month  += 1; }
+                            if ms >= today_start && ms < today_end {
+                                h.count_today += 1;
+                            }
+                            if ms >= week_start && ms <= now_ms {
+                                h.count_week += 1;
+                            }
+                            if ms >= month_start {
+                                h.count_month += 1;
+                            }
                         });
                         save_topic_header(&db, &sig.get_untracked()).await;
                     }
@@ -543,7 +617,9 @@ fn TopicDetail() -> impl IntoView {
             let sx = touch_start_x.get_value();
             let dx = t.client_x() as f64 - sx;
             let dy = (t.client_y() as f64 - touch_start_y.get_value()).abs();
-            if sx < 40.0 && dx > 50.0 && dx > dy { show_detail.set(false); }
+            if sx < 40.0 && dx > 50.0 && dx > dy {
+                show_detail.set(false);
+            }
         }
     };
 
@@ -682,14 +758,14 @@ fn TopicDetail() -> impl IntoView {
 
 #[component]
 fn App() -> impl IntoView {
-    let topic_list: TopicList   = RwSignal::new(Vec::new());
-    let db_ready_signal         = RwSignal::new(false);
+    let topic_list: TopicList = RwSignal::new(Vec::new());
+    let db_ready_signal = RwSignal::new(false);
 
     let (new_name, set_new_name) = signal(String::new());
-    let editing     = RwSignal::new(false);
-    let adding      = RwSignal::new(false);
-    let show_detail: RwSignal<bool>   = RwSignal::new(false);
-    let detail_id:   RwSignal<String> = RwSignal::new(String::new());
+    let editing = RwSignal::new(false);
+    let adding = RwSignal::new(false);
+    let show_detail: RwSignal<bool> = RwSignal::new(false);
+    let detail_id: RwSignal<String> = RwSignal::new(String::new());
 
     // Open IDB asynchronously, migrate from localStorage if needed.
     spawn_local(async move {
@@ -710,20 +786,23 @@ fn App() -> impl IntoView {
     let on_import = move |ev: leptos::ev::Event| {
         let input: web_sys::HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
         let files = input.files().unwrap();
-        if files.length() == 0 { return; }
+        if files.length() == 0 {
+            return;
+        }
         let file = files.get(0).unwrap();
 
-        let filename   = file.name();
-        let topic_name = filename.strip_suffix(".txt").unwrap_or(&filename).to_string();
+        let filename = file.name();
+        let topic_name = filename
+            .strip_suffix(".txt")
+            .unwrap_or(&filename)
+            .to_string();
 
-        let reader       = web_sys::FileReader::new().unwrap();
+        let reader = web_sys::FileReader::new().unwrap();
         let reader_clone = reader.clone();
 
         let on_load = Closure::once(move |_: JsValue| {
             let text = reader_clone.result().unwrap().as_string().unwrap();
-            let new_rows: Vec<EventRow> = text.lines()
-                .filter_map(parse_import_line)
-                .collect();
+            let new_rows: Vec<EventRow> = text.lines().filter_map(parse_import_line).collect();
 
             let Some(db) = get_db() else { return };
 
@@ -751,27 +830,31 @@ fn App() -> impl IntoView {
                     sig.update(|h| {
                         h.count_total = counts.3;
                         h.count_today = counts.0;
-                        h.count_week  = counts.1;
+                        h.count_week = counts.1;
                         h.count_month = counts.2;
                     });
                     save_topic_header(&db, &sig.get_untracked()).await;
                 });
             } else {
-                let topic_id   = new_id();
-                let tid2       = topic_id.clone();
-                let name2      = topic_name.clone();
+                let topic_id = new_id();
+                let tid2 = topic_id.clone();
+                let name2 = topic_name.clone();
                 let rows_clone = new_rows.clone();
                 spawn_local(async move {
-                    let rows_with_topic: Vec<EventRow> = rows_clone.into_iter()
-                        .map(|mut r| { r.topic_id = tid2.clone(); r })
+                    let rows_with_topic: Vec<EventRow> = rows_clone
+                        .into_iter()
+                        .map(|mut r| {
+                            r.topic_id = tid2.clone();
+                            r
+                        })
                         .collect();
                     let counts = event_row_counts(&rows_with_topic);
                     let header = TopicHeader {
-                        id:          tid2.clone(),
-                        name:        name2,
+                        id: tid2.clone(),
+                        name: name2,
                         count_total: counts.3,
                         count_today: counts.0,
-                        count_week:  counts.1,
+                        count_week: counts.1,
                         count_month: counts.2,
                     };
                     save_topic_header(&db, &header).await;
@@ -793,18 +876,22 @@ fn App() -> impl IntoView {
     let add_topic = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let name = new_name.get().trim().to_string();
-        if name.is_empty() { return; }
+        if name.is_empty() {
+            return;
+        }
         let header = TopicHeader {
-            id:          new_id(),
+            id: new_id(),
             name,
             count_total: 0,
             count_today: 0,
-            count_week:  0,
+            count_week: 0,
             count_month: 0,
         };
         if let Some(db) = get_db() {
             let h2 = header.clone();
-            spawn_local(async move { save_topic_header(&db, &h2).await; });
+            spawn_local(async move {
+                save_topic_header(&db, &h2).await;
+            });
         }
         topic_list.update(|rows| rows.push(RwSignal::new(header)));
         set_new_name.set(String::new());
