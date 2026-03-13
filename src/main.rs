@@ -993,10 +993,10 @@ mod tests {
     #[test]
     fn mixed_events_correct_counts() {
         let events = vec![
-            ev(NOW),                         // today + week + month
-            ev(NOW - 86_400_000.0),          // week + month
-            ev(NOW - 8.0 * 86_400_000.0),    // month only
-            ev(MONTH_START - 1.0),           // none
+            ev(NOW),                      // today + week + month
+            ev(NOW - 86_400_000.0),       // week + month
+            ev(NOW - 8.0 * 86_400_000.0), // month only
+            ev(MONTH_START - 1.0),        // none
         ];
         let (today, week, month, total) = event_row_counts(&events, bounds());
         assert_eq!(today, 1);
@@ -1077,7 +1077,9 @@ mod wasm_tests {
         let hdr = test_header("topic-idb-1", "Running");
         save_topic_header(&db, &hdr).await;
         let loaded = load_topic_headers(&db).await;
-        assert!(loaded.iter().any(|h| h.id == "topic-idb-1" && h.name == "Running"));
+        assert!(loaded
+            .iter()
+            .any(|h| h.id == "topic-idb-1" && h.name == "Running"));
     }
 
     // IDB: add an event then retrieve it by topic
