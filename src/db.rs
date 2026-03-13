@@ -174,8 +174,8 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        EventRow, TopicHeader, add_event_idb, delete_event_idb, load_events_for_topic,
-        load_topic_headers, open_db, save_topic_header,
+        EventRow, TopicHeader, add_event_idb, delete_event_idb, delete_topic_idb,
+        load_events_for_topic, load_topic_headers, open_db, save_topic_header,
     };
     use wasm_bindgen_test::*;
 
@@ -236,5 +236,60 @@ mod wasm_tests {
         delete_event_idb(&db, "ev-idb-del").await;
         let events = load_events_for_topic(&db, "topic-idb-3").await;
         assert!(!events.iter().any(|e| e.id == "ev-idb-del"));
+    }
+
+    // IDB: deleting a topic also removes all its events
+    #[wasm_bindgen_test]
+    async fn idb_delete_topic_cascades() {
+        let db = open_db().await;
+        save_topic_header(&db, &test_header("topic-del-1", "Yoga")).await;
+        add_event_idb(&db, &test_event("ev-del-1", "topic-del-1", 1_000.0)).await;
+        add_event_idb(&db, &test_event("ev-del-2", "topic-del-1", 2_000.0)).await;
+
+        delete_topic_idb(&db, "topic-del-1").await;
+
+        let topics = load_topic_headers(&db).await;
+        assert!(!topics.iter().any(|h| h.id == "topic-del-1"));
+
+        let events = load_events_for_topic(&db, "topic-del-1").await;
+        assert!(events.is_empty());
+    }
+
+    // IDB: saving a topic header twice with the same ID overwrites it
+    #[wasm_bindgen_test]
+    async fn idb_save_topic_header_overwrites() {
+        let db = open_db().await;
+        let mut hdr = test_header("topic-upsert-1", "Meditation");
+        save_topic_header(&db, &hdr).await;
+
+        hdr.count_total = 42;
+        hdr.count_today = 3;
+        save_topic_header(&db, &hdr).await;
+
+        let topics = load_topic_headers(&db).await;
+        let reloaded = topics
+            .iter()
+            .find(|h| h.id == "topic-upsert-1")
+            .expect("topic should still exist");
+        assert_eq!(reloaded.count_total, 42);
+        assert_eq!(reloaded.count_today, 3);
+    }
+
+    // IDB: load_events_for_topic returns events newest-first
+    #[wasm_bindgen_test]
+    async fn idb_load_events_sorted_descending() {
+        let db = open_db().await;
+        save_topic_header(&db, &test_header("topic-sort-1", "Running")).await;
+        add_event_idb(&db, &test_event("ev-sort-1", "topic-sort-1", 1_000.0)).await;
+        add_event_idb(&db, &test_event("ev-sort-2", "topic-sort-1", 3_000.0)).await;
+        add_event_idb(&db, &test_event("ev-sort-3", "topic-sort-1", 2_000.0)).await;
+
+        let events = load_events_for_topic(&db, "topic-sort-1").await;
+        assert_eq!(events.len(), 3);
+        assert!(
+            events[0].timestamp_ms >= events[1].timestamp_ms
+                && events[1].timestamp_ms >= events[2].timestamp_ms,
+            "events should be in descending order by timestamp_ms"
+        );
     }
 }

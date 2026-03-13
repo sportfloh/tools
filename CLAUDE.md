@@ -36,31 +36,37 @@ cargo test --lib
 wasm-pack test --headless --chrome
 ```
 
-### Current coverage (8 native + 16 WASM tests, all in `src/time.rs`)
+### Current coverage (8 native + 19 WASM tests)
 
-| Test | Kind | What it checks |
-|------|------|----------------|
-| `empty_events_all_zero` | native | `event_row_counts` returns all zeros for empty input |
-| `event_in_today_counts_all_periods` | native | event at now counts in today, week, month, total |
-| `event_yesterday_not_today_but_in_week_and_month` | native | 24 h old event skips today, hits week + month |
-| `event_eight_days_ago_only_in_month` | native | >7 days old skips week, still in month |
-| `event_before_month_start_only_in_total` | native | event before month start only hits total |
-| `mixed_events_correct_counts` | native | combination of all boundary cases |
-| `topic_header_serde_round_trip` | native | `TopicHeader` serialises and deserialises correctly |
-| `event_row_serde_round_trip` | native | `EventRow` serialises and deserialises correctly |
-| `parse_valid_import_line` | WASM | valid timestamp line parses to an `EventRow` |
-| `parse_empty_import_line_returns_none` | WASM | empty / blank lines return `None` |
-| `parse_malformed_import_line_returns_none` | WASM | bad input returns `None` |
-| `format_timestamp_has_expected_shape` | WASM | output is 21-char `DD.MM.YYYY - HH:MM:SS` |
-| `format_timestamp_shape_is_stable_for_any_valid_iso` | WASM | shape holds for a second ISO input |
-| `now_timestamp_returns_iso_utc_string` | WASM | non-empty, contains `T`, ends with `Z` |
-| `now_local_datetime_str_has_expected_shape` | WASM | 19-char `YYYY-MM-DDTHH:MM:SS` layout |
-| `new_id_has_numeric_dash_numeric_format` | WASM | ID is `{digits}-{digits}` |
-| `new_id_is_unique_across_calls` | WASM | two consecutive calls differ |
-| `time_boundaries_ordering_invariants` | WASM | `today_start ≤ now < today_end`, `month_start ≤ now`, `week_start ≤ now` |
-| `time_boundaries_today_span_is_exactly_one_day` | WASM | `today_end − today_start == 86 400 000` |
-| `time_boundaries_week_start_is_seven_days_before_now` | WASM | `now − week_start == 7 × 86 400 000` |
-| `export_topic_does_not_panic` | WASM | smoke test: empty slice + one-event slice don't panic |
+| Test | Kind | Where | What it checks |
+|------|------|-------|----------------|
+| `empty_events_all_zero` | native | `time.rs` | `event_row_counts` returns all zeros for empty input |
+| `event_in_today_counts_all_periods` | native | `time.rs` | event at now counts in today, week, month, total |
+| `event_yesterday_not_today_but_in_week_and_month` | native | `time.rs` | 24 h old event skips today, hits week + month |
+| `event_eight_days_ago_only_in_month` | native | `time.rs` | >7 days old skips week, still in month |
+| `event_before_month_start_only_in_total` | native | `time.rs` | event before month start only hits total |
+| `mixed_events_correct_counts` | native | `time.rs` | combination of all boundary cases |
+| `topic_header_serde_round_trip` | native | `time.rs` | `TopicHeader` serialises and deserialises correctly |
+| `event_row_serde_round_trip` | native | `time.rs` | `EventRow` serialises and deserialises correctly |
+| `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
+| `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
+| `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
+| `format_timestamp_has_expected_shape` | WASM | `time.rs` | output is 21-char `DD.MM.YYYY - HH:MM:SS` |
+| `format_timestamp_shape_is_stable_for_any_valid_iso` | WASM | `time.rs` | shape holds for a second ISO input |
+| `now_timestamp_returns_iso_utc_string` | WASM | `time.rs` | non-empty, contains `T`, ends with `Z` |
+| `now_local_datetime_str_has_expected_shape` | WASM | `time.rs` | 19-char `YYYY-MM-DDTHH:MM:SS` layout |
+| `new_id_has_numeric_dash_numeric_format` | WASM | `time.rs` | ID is `{digits}-{digits}` |
+| `new_id_is_unique_across_calls` | WASM | `time.rs` | two consecutive calls differ |
+| `time_boundaries_ordering_invariants` | WASM | `time.rs` | `today_start ≤ now < today_end`, `month_start ≤ now`, `week_start ≤ now` |
+| `time_boundaries_today_span_is_exactly_one_day` | WASM | `time.rs` | `today_end − today_start == 86 400 000` |
+| `time_boundaries_week_start_is_seven_days_before_now` | WASM | `time.rs` | `now − week_start == 7 × 86 400 000` |
+| `export_topic_does_not_panic` | WASM | `time.rs` | smoke test: empty slice + one-event slice don't panic |
+| `idb_save_and_load_topic` | WASM | `db.rs` | save a `TopicHeader`, reload, verify presence |
+| `idb_add_and_load_events` | WASM | `db.rs` | add event, load by topic ID, verify it exists |
+| `idb_delete_event` | WASM | `db.rs` | add event, delete it, verify not found |
+| `idb_delete_topic_cascades` | WASM | `db.rs` | deleting a topic removes its header and all its events |
+| `idb_save_topic_header_overwrites` | WASM | `db.rs` | saving same topic ID twice overwrites counts (upsert) |
+| `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
 
 ## Source modules
 
