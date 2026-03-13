@@ -43,10 +43,11 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Install cargo-binstall
+        uses: cargo-bins/cargo-binstall@main
+
       - name: Install trunk
-        run: |
-          curl -sL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz \
-            | tar xz -C ~/.cargo/bin
+        run: cargo binstall trunk --no-confirm
 
       - name: Build
         run: trunk build --release --public-url /tools/
