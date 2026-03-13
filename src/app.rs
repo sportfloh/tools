@@ -1,6 +1,6 @@
 use crate::db::{
-    add_event_idb, delete_event_idb, delete_topic_idb, get_db, load_events_for_topic,
-    load_topic_headers, open_db, save_topic_header, EventRow, TopicHeader, DB,
+    DB, EventRow, TopicHeader, add_event_idb, delete_event_idb, delete_topic_idb, get_db,
+    load_events_for_topic, load_topic_headers, open_db, save_topic_header,
 };
 use crate::time::{
     event_row_counts, export_topic, format_timestamp, new_id, now_local_datetime_str,
