@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
@@ -17,6 +19,11 @@ const STORAGE_KEY: &str = "event_tracker_v1";
 struct TrackedEvent {
     id: String,
     timestamp: String,
+    /// Unix epoch in milliseconds (local wall-clock time).
+    /// Added later; #[serde(default)] lets old stored records deserialize with 0.0,
+    /// which load_topics() then backfills from the ISO timestamp string.
+    #[serde(default)]
+    timestamp_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -35,7 +42,17 @@ fn load_topics() -> Vec<Topic> {
 
     if let Some(s) = storage {
         if let Ok(Some(json)) = s.get_item(STORAGE_KEY) {
-            if let Ok(topics) = serde_json::from_str::<Vec<Topic>>(&json) {
+            if let Ok(mut topics) = serde_json::from_str::<Vec<Topic>>(&json) {
+                // Backfill timestamp_ms for events written before the field existed.
+                for topic in &mut topics {
+                    for ev in &mut topic.events {
+                        if ev.timestamp_ms == 0.0 {
+                            ev.timestamp_ms = js_sys::Date::new(
+                                &JsValue::from_str(&ev.timestamp)
+                            ).get_time();
+                        }
+                    }
+                }
                 return topics;
             }
         }
@@ -94,30 +111,36 @@ fn new_id() -> String {
 }
 
 // Returns (today, week, month, total) counts for a slice of events.
+//
+// Performance: computes three ms-based boundaries with 2 Date objects,
+// then uses pure arithmetic per event — no per-event Date allocation.
 fn event_counts(events: &[TrackedEvent]) -> (usize, usize, usize, usize) {
     let now = js_sys::Date::new_0();
-    let now_ms = js_sys::Date::now();
-    let (cy, cm, cd) = (now.get_full_year(), now.get_month(), now.get_date());
-    let week_ms = 7.0 * 24.0 * 3600.0 * 1000.0;
+    let now_ms = now.get_time();
+    let (cy, cm, cd) = (now.get_full_year(), now.get_month() + 1, now.get_date());
 
-    let mut today = 0usize;
-    let mut week  = 0usize;
-    let mut month = 0usize;
+    // Local midnight of today as "YYYY-MM-DDTHH:MM:SS" → Date → ms
+    let today_start = js_sys::Date::new(
+        &JsValue::from_str(&format!("{}-{:02}-{:02}T00:00:00", cy, cm, cd))
+    ).get_time();
+    let today_end   = today_start + 86_400_000.0;
 
-    for ev in events {
-        let d = js_sys::Date::new(&JsValue::from_str(&ev.timestamp));
-        let ev_ms = d.get_time();
-        if d.get_full_year() == cy && d.get_month() == cm && d.get_date() == cd {
-            today += 1;
-        }
-        if now_ms - ev_ms < week_ms {
-            week += 1;
-        }
-        if d.get_full_year() == cy && d.get_month() == cm {
-            month += 1;
-        }
-    }
-    (today, week, month, events.len())
+    // First ms of the current month
+    let month_start = js_sys::Date::new(
+        &JsValue::from_str(&format!("{}-{:02}-01T00:00:00", cy, cm))
+    ).get_time();
+
+    let week_start = now_ms - 7.0 * 86_400_000.0;
+
+    events.iter().fold((0usize, 0usize, 0usize, events.len()), |(t, w, m, total), ev| {
+        let ms = ev.timestamp_ms;
+        (
+            t + (ms >= today_start && ms < today_end) as usize,
+            w + (ms >= week_start && ms <= now_ms)    as usize,
+            m + (ms >= month_start)                    as usize,
+            total,
+        )
+    })
 }
 
 // Parses one line of the import format "YYYY-MM-DD HH:MM:SS.ffffff"
@@ -133,7 +156,8 @@ fn parse_import_line(line: &str) -> Option<TrackedEvent> {
     let local_iso = format!("{}T{}.{}", date_part, hms, ms);
     let d = js_sys::Date::new(&JsValue::from_str(&local_iso));
     if d.get_time().is_nan() { return None; }
-    Some(TrackedEvent { id: new_id(), timestamp: d.to_iso_string().as_string()? })
+    let ms = d.get_time();
+    Some(TrackedEvent { id: new_id(), timestamp: d.to_iso_string().as_string()?, timestamp_ms: ms })
 }
 
 // Formats events as "YYYY-MM-DD HH:MM:SS.000000" (local time) and triggers
@@ -184,7 +208,7 @@ fn TopicCard(topic_id: String) -> impl IntoView {
         topics.update(|ts| {
             tid.with_value(|id| {
                 if let Some(t) = ts.iter_mut().find(|t| t.id == *id) {
-                    t.events.push(TrackedEvent { id: new_id(), timestamp: now_timestamp() });
+                    t.events.push(TrackedEvent { id: new_id(), timestamp: now_timestamp(), timestamp_ms: js_sys::Date::now() });
                 }
             });
         });
@@ -287,10 +311,11 @@ fn TopicDetail() -> impl IntoView {
         let d = js_sys::Date::new(&JsValue::from_str(&dt_str));
         if !d.get_time().is_nan() {
             let iso = d.to_iso_string().as_string().unwrap_or_default();
+            let ms  = d.get_time();
             let id = detail_id.get();
             topics.update(|ts| {
                 if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
-                    t.events.push(TrackedEvent { id: new_id(), timestamp: iso });
+                    t.events.push(TrackedEvent { id: new_id(), timestamp: iso, timestamp_ms: ms });
                 }
             });
         }
@@ -450,7 +475,28 @@ fn App() -> impl IntoView {
     let show_detail: RwSignal<bool>   = RwSignal::new(false);
     let detail_id:   RwSignal<String> = RwSignal::new(String::new());
 
-    Effect::new(move |_| { save_topics(&topics.get()); });
+    // Debounced save: coalesce rapid updates into a single localStorage write
+    // 500 ms after the last change. Uses a JS timeout handle tracked in an Rc<Cell>.
+    let save_timer: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
+    Effect::new(move |_| {
+        let snap = topics.get();
+        let win  = window().unwrap();
+        // Cancel any pending save
+        let prev = save_timer.get();
+        if prev >= 0 { win.clear_timeout_with_handle(prev); }
+        let timer_clone = save_timer.clone();
+        // Closure::once_into_js transfers ownership to JS; no Rust-side drop needed.
+        let cb = Closure::once_into_js(move || {
+            save_topics(&snap);
+            timer_clone.set(-1);
+        });
+        match win.set_timeout_with_callback_and_timeout_and_arguments_0(
+            cb.unchecked_ref(), 500
+        ) {
+            Ok(id) => save_timer.set(id),
+            Err(_) => save_topics(&topics.get()), // fallback: save synchronously
+        }
+    });
 
     provide_context(topics);
     provide_context(Editing(editing));
