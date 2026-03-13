@@ -261,12 +261,16 @@ mod tests {
     }
 }
 
-// ─── WASM integration tests (parse utilities) ─────────────────────────────────
+// ─── WASM integration tests (parse utilities + js_sys functions) ──────────────
 //
 // Run with: wasm-pack test --headless --chrome
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
-    use super::parse_import_line;
+    use super::{
+        export_topic, format_timestamp, new_id, now_local_datetime_str, now_timestamp,
+        parse_import_line, time_boundaries,
+    };
+    use crate::db::EventRow;
     use wasm_bindgen_test::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -293,5 +297,104 @@ mod wasm_tests {
     fn parse_malformed_import_line_returns_none() {
         assert!(parse_import_line("not-a-date").is_none());
         assert!(parse_import_line("9999-99-99 99:99:99.000").is_none());
+    }
+
+    // format_timestamp: output shape is DD.MM.YYYY - HH:MM:SS (21 chars)
+    #[wasm_bindgen_test]
+    fn format_timestamp_has_expected_shape() {
+        let s = format_timestamp("2023-11-15T12:30:45.000Z");
+        assert_eq!(s.len(), 21, "unexpected length: {s}");
+        assert_eq!(&s[2..3], ".");
+        assert_eq!(&s[5..6], ".");
+        assert_eq!(&s[10..13], " - ");
+    }
+
+    #[wasm_bindgen_test]
+    fn format_timestamp_shape_is_stable_for_any_valid_iso() {
+        let s = format_timestamp("2000-01-01T00:00:00.000Z");
+        assert_eq!(s.len(), 21);
+        assert_eq!(&s[2..3], ".");
+        assert_eq!(&s[10..13], " - ");
+    }
+
+    // now_timestamp: returns a non-empty ISO 8601 UTC string
+    #[wasm_bindgen_test]
+    fn now_timestamp_returns_iso_utc_string() {
+        let ts = now_timestamp();
+        assert!(!ts.is_empty());
+        assert!(ts.contains('T'), "expected ISO format, got: {ts}");
+        assert!(ts.ends_with('Z'), "expected UTC 'Z' suffix, got: {ts}");
+    }
+
+    // now_local_datetime_str: shape is YYYY-MM-DDTHH:MM:SS (19 chars)
+    #[wasm_bindgen_test]
+    fn now_local_datetime_str_has_expected_shape() {
+        let s = now_local_datetime_str();
+        assert_eq!(s.len(), 19, "unexpected length: {s}");
+        assert_eq!(&s[4..5], "-");
+        assert_eq!(&s[7..8], "-");
+        assert_eq!(&s[10..11], "T");
+        assert_eq!(&s[13..14], ":");
+        assert_eq!(&s[16..17], ":");
+    }
+
+    // new_id: format is {digits}-{digits}
+    #[wasm_bindgen_test]
+    fn new_id_has_numeric_dash_numeric_format() {
+        let id = new_id();
+        let mut parts = id.splitn(2, '-');
+        let ts_part = parts.next().expect("missing ts part");
+        let rand_part = parts.next().expect("missing rand part");
+        assert!(
+            ts_part.chars().all(|c| c.is_ascii_digit()),
+            "ts not numeric: {ts_part}"
+        );
+        assert!(
+            rand_part.chars().all(|c| c.is_ascii_digit()),
+            "rand not numeric: {rand_part}"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn new_id_is_unique_across_calls() {
+        let a = new_id();
+        let b = new_id();
+        assert_ne!(a, b);
+    }
+
+    // time_boundaries: structural invariants
+    #[wasm_bindgen_test]
+    fn time_boundaries_ordering_invariants() {
+        let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+        assert!(now_ms > 0.0);
+        assert!(today_start <= now_ms, "today_start should be <= now");
+        assert!(now_ms < today_end, "now should be < today_end");
+        assert!(month_start <= now_ms, "month_start should be <= now");
+        assert!(week_start <= now_ms, "week_start should be <= now");
+    }
+
+    #[wasm_bindgen_test]
+    fn time_boundaries_today_span_is_exactly_one_day() {
+        let (_, today_start, today_end, _, _) = time_boundaries();
+        assert_eq!(today_end - today_start, 86_400_000.0);
+    }
+
+    #[wasm_bindgen_test]
+    fn time_boundaries_week_start_is_seven_days_before_now() {
+        let (now_ms, _, _, _, week_start) = time_boundaries();
+        assert_eq!(now_ms - week_start, 7.0 * 86_400_000.0);
+    }
+
+    // export_topic: smoke test — must not panic with empty or non-empty input
+    #[wasm_bindgen_test]
+    fn export_topic_does_not_panic() {
+        export_topic("smoke-test", &[]);
+        let ev = EventRow {
+            id: "e1".into(),
+            topic_id: "t1".into(),
+            timestamp: "2023-11-15T12:00:00.000Z".into(),
+            timestamp_ms: 1_700_046_000_000.0,
+        };
+        export_topic("smoke-test-2", &[ev]);
     }
 }

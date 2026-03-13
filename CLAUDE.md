@@ -36,7 +36,7 @@ cargo test --lib
 wasm-pack test --headless --chrome
 ```
 
-### Current coverage (8 native + 3 WASM tests, all in `src/time.rs`)
+### Current coverage (8 native + 16 WASM tests, all in `src/time.rs`)
 
 | Test | Kind | What it checks |
 |------|------|----------------|
@@ -51,8 +51,16 @@ wasm-pack test --headless --chrome
 | `parse_valid_import_line` | WASM | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | bad input returns `None` |
-
-> **Note:** `time_boundaries()` and `format_timestamp()` are not unit-tested — they depend on `js_sys::Date` and require the WASM runtime. Covered manually.
+| `format_timestamp_has_expected_shape` | WASM | output is 21-char `DD.MM.YYYY - HH:MM:SS` |
+| `format_timestamp_shape_is_stable_for_any_valid_iso` | WASM | shape holds for a second ISO input |
+| `now_timestamp_returns_iso_utc_string` | WASM | non-empty, contains `T`, ends with `Z` |
+| `now_local_datetime_str_has_expected_shape` | WASM | 19-char `YYYY-MM-DDTHH:MM:SS` layout |
+| `new_id_has_numeric_dash_numeric_format` | WASM | ID is `{digits}-{digits}` |
+| `new_id_is_unique_across_calls` | WASM | two consecutive calls differ |
+| `time_boundaries_ordering_invariants` | WASM | `today_start ≤ now < today_end`, `month_start ≤ now`, `week_start ≤ now` |
+| `time_boundaries_today_span_is_exactly_one_day` | WASM | `today_end − today_start == 86 400 000` |
+| `time_boundaries_week_start_is_seven_days_before_now` | WASM | `now − week_start == 7 × 86 400 000` |
+| `export_topic_does_not_panic` | WASM | smoke test: empty slice + one-event slice don't panic |
 
 ## Source modules
 
