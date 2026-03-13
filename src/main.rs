@@ -8,7 +8,6 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::JsValue;
 use web_sys::window;
 
-const STORAGE_KEY: &str = "event_tracker_v1";
 const PAGE_SIZE: usize = 50;
 
 // Newtype wrappers so Leptos context lookup never confuses same-type signals.
@@ -52,21 +51,6 @@ struct EventRow {
     topic_id: String,
     timestamp: String,
     timestamp_ms: f64,
-}
-
-/// Used only for one-time localStorage migration.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct TrackedEvent {
-    id: String,
-    timestamp: String,
-    #[serde(default)]
-    timestamp_ms: f64,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct Topic {
-    id: String,
-    name: String,
-    events: Vec<TrackedEvent>,
 }
 
 // ─── IDB helpers ─────────────────────────────────────────────────────────────
@@ -201,53 +185,6 @@ async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
     tx.done().await.ok();
 }
 
-async fn migrate_from_localstorage(db: &Rexie) {
-    if !load_topic_headers(db).await.is_empty() {
-        return;
-    }
-
-    let storage = match window().and_then(|w| w.local_storage().ok()).flatten() {
-        Some(s) => s,
-        None => return,
-    };
-    let json = match storage.get_item(STORAGE_KEY).ok().flatten() {
-        Some(j) => j,
-        None => return,
-    };
-    let old: Vec<Topic> = match serde_json::from_str(&json) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
-
-    for mut topic in old {
-        for ev in &mut topic.events {
-            if ev.timestamp_ms == 0.0 {
-                ev.timestamp_ms = js_sys::Date::new(&JsValue::from_str(&ev.timestamp)).get_time();
-            }
-        }
-        let raw_counts = event_counts_raw(&topic.events);
-        let header = TopicHeader {
-            id: topic.id.clone(),
-            name: topic.name,
-            count_total: raw_counts.3 as u32,
-            count_today: raw_counts.0 as u32,
-            count_week: raw_counts.1 as u32,
-            count_month: raw_counts.2 as u32,
-        };
-        save_topic_header(db, &header).await;
-        for ev in topic.events {
-            let row = EventRow {
-                id: ev.id,
-                topic_id: topic.id.clone(),
-                timestamp: ev.timestamp,
-                timestamp_ms: ev.timestamp_ms,
-            };
-            add_event_idb(db, &row).await;
-        }
-    }
-    storage.remove_item(STORAGE_KEY).ok();
-}
-
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 fn now_timestamp() -> String {
@@ -303,21 +240,6 @@ fn time_boundaries() -> (f64, f64, f64, f64, f64) {
         js_sys::Date::new(&JsValue::from_str(&format!("{}-{:02}-01T00:00:00", cy, cm))).get_time();
     let week_start = now_ms - 7.0 * 86_400_000.0;
     (now_ms, today_start, today_end, month_start, week_start)
-}
-
-fn event_counts_raw(events: &[TrackedEvent]) -> (usize, usize, usize, usize) {
-    let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
-    events
-        .iter()
-        .fold((0, 0, 0, events.len()), |(t, w, m, total), ev| {
-            let ms = ev.timestamp_ms;
-            (
-                t + (ms >= today_start && ms < today_end) as usize,
-                w + (ms >= week_start && ms <= now_ms) as usize,
-                m + (ms >= month_start) as usize,
-                total,
-            )
-        })
 }
 
 fn event_row_counts(events: &[EventRow]) -> (u32, u32, u32, u32) {
@@ -767,10 +689,8 @@ fn App() -> impl IntoView {
     let show_detail: RwSignal<bool> = RwSignal::new(false);
     let detail_id: RwSignal<String> = RwSignal::new(String::new());
 
-    // Open IDB asynchronously, migrate from localStorage if needed.
     spawn_local(async move {
         let db = open_db().await;
-        migrate_from_localstorage(&db).await;
         let headers = load_topic_headers(&db).await;
         DB.with(|cell| *cell.borrow_mut() = Some(db));
         topic_list.set(headers.into_iter().map(RwSignal::new).collect());
