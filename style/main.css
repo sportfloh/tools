@@ -531,6 +531,30 @@ html, body {
   }
 }
 
+/* ── Load-more button ───────────────────────────────────────────────────────── */
+.btn-load-more {
+  display: block;
+  width: calc(100% - 32px);
+  margin: 12px 16px;
+  padding: 10px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  color: var(--color-primary);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-load-more:active { opacity: 0.7; }
+
+/* ── Loading indicator ──────────────────────────────────────────────────────── */
+.loading-indicator {
+  padding: 24px;
+  text-align: center;
+  color: var(--color-muted);
+  font-size: 0.95rem;
+}
+
 /* light CSS + OS inversion → perceived dark; native UI should follow */
 @media (prefers-color-scheme: light) and (inverted-colors: inverted) {
   :root { color-scheme: dark; }

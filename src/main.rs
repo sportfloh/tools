@@ -1,6 +1,7 @@
-use std::cell::Cell;
-use std::rc::Rc;
+use std::cell::RefCell;
 use leptos::prelude::*;
+use leptos::task::spawn_local;
+use rexie::{Index, KeyRange, ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -8,85 +9,234 @@ use wasm_bindgen::JsValue;
 use web_sys::window;
 
 const STORAGE_KEY: &str = "event_tracker_v1";
+const PAGE_SIZE: usize = 50;
 
 // Newtype wrappers so Leptos context lookup never confuses same-type signals.
 #[derive(Clone, Copy)] struct Editing(RwSignal<bool>);
 #[derive(Clone, Copy)] struct ShowDetail(RwSignal<bool>);
+#[derive(Clone, Copy)] struct DbReady(RwSignal<bool>);
 
-// Per-topic reactive signal list.  The outer signal changes only when topics
-// are added or removed; each inner RwSignal<Topic> changes only when that
-// topic's own data changes.  This means TopicCard memos re-run only for
-// their own topic, not for every other topic that receives an event.
-type TopicList = RwSignal<Vec<RwSignal<Topic>>>;
+// Per-topic reactive signal list. Outer signal changes only on add/remove;
+// inner RwSignal<TopicHeader> changes only when that topic's counts change.
+type TopicList = RwSignal<Vec<RwSignal<TopicHeader>>>;
+
+// Thread-local DB handle — avoids Send + Sync requirement on Rexie.
+thread_local! {
+    static DB: RefCell<Option<Rexie>> = RefCell::new(None);
+}
+
+fn get_db() -> Option<Rexie> {
+    DB.with(|db| db.borrow().clone())
+}
 
 // ─── Data model ──────────────────────────────────────────────────────────────
 
+/// Lightweight header kept in reactive signals — no events Vec.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct TopicHeader {
+    id:          String,
+    name:        String,
+    count_total: u32,
+    count_today: u32,
+    count_week:  u32,
+    count_month: u32,
+}
+
+/// Row stored in IDB "events" store.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct EventRow {
+    id:           String,
+    topic_id:     String,
+    timestamp:    String,
+    timestamp_ms: f64,
+}
+
+/// Used only for one-time localStorage migration.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct TrackedEvent {
     id: String,
     timestamp: String,
-    /// Unix epoch in milliseconds.  #[serde(default)] lets records written
-    /// before this field existed deserialise with 0.0; load_topics() backfills.
     #[serde(default)]
     timestamp_ms: f64,
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct Topic {
-    id: String,
-    name: String,
+    id:     String,
+    name:   String,
     events: Vec<TrackedEvent>,
 }
 
-// ─── Storage helpers ─────────────────────────────────────────────────────────
+// ─── IDB helpers ─────────────────────────────────────────────────────────────
 
-fn load_topics() -> Vec<Topic> {
-    let storage = window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten();
+async fn open_db() -> Rexie {
+    Rexie::builder("trackit-db")
+        .version(1)
+        .add_object_store(ObjectStore::new("topics").key_path("id"))
+        .add_object_store(
+            ObjectStore::new("events")
+                .key_path("id")
+                .add_index(Index::new("by_topic", "topic_id")),
+        )
+        .build()
+        .await
+        .expect("IDB open failed")
+}
 
-    if let Some(s) = storage {
-        if let Ok(Some(json)) = s.get_item(STORAGE_KEY) {
-            if let Ok(mut topics) = serde_json::from_str::<Vec<Topic>>(&json) {
-                // Backfill timestamp_ms for events written before the field existed.
-                for topic in &mut topics {
-                    for ev in &mut topic.events {
-                        if ev.timestamp_ms == 0.0 {
-                            ev.timestamp_ms = js_sys::Date::new(
-                                &JsValue::from_str(&ev.timestamp)
-                            ).get_time();
-                        }
-                    }
+async fn load_topic_headers(db: &Rexie) -> Vec<TopicHeader> {
+    let tx = match db.transaction(&["topics"], TransactionMode::ReadOnly) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let store = match tx.store("topics") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let records = store.get_all(None, None, None, None).await.unwrap_or_default();
+    tx.done().await.ok();
+    records.into_iter()
+        .filter_map(|(_k, v)| serde_wasm_bindgen::from_value::<TopicHeader>(v).ok())
+        .collect()
+}
+
+async fn save_topic_header(db: &Rexie, h: &TopicHeader) {
+    let tx = match db.transaction(&["topics"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let store = match tx.store("topics") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    if let Ok(val) = serde_wasm_bindgen::to_value(h) {
+        store.put(&val, None).await.ok();
+    }
+    tx.done().await.ok();
+}
+
+async fn load_events_for_topic(db: &Rexie, topic_id: &str) -> Vec<EventRow> {
+    let tx = match db.transaction(&["events"], TransactionMode::ReadOnly) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let store = match tx.store("events") {
+        Ok(s) => s,
+        Err(_) => return Vec::new(),
+    };
+    let index = match store.index("by_topic") {
+        Ok(i) => i,
+        Err(_) => return Vec::new(),
+    };
+    let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
+    let records = index.get_all(key_range.as_ref(), None, None, None).await.unwrap_or_default();
+    tx.done().await.ok();
+    let mut rows: Vec<EventRow> = records.into_iter()
+        .filter_map(|(_k, v)| serde_wasm_bindgen::from_value::<EventRow>(v).ok())
+        .collect();
+    rows.sort_by(|a, b| b.timestamp_ms.partial_cmp(&a.timestamp_ms).unwrap_or(std::cmp::Ordering::Equal));
+    rows
+}
+
+async fn add_event_idb(db: &Rexie, row: &EventRow) {
+    let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let store = match tx.store("events") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    if let Ok(val) = serde_wasm_bindgen::to_value(row) {
+        store.put(&val, None).await.ok();
+    }
+    tx.done().await.ok();
+}
+
+async fn delete_event_idb(db: &Rexie, event_id: &str) {
+    let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let store = match tx.store("events") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+    store.delete(&JsValue::from_str(event_id)).await.ok();
+    tx.done().await.ok();
+}
+
+async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
+    let tx = match db.transaction(&["events", "topics"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    // Delete all events for this topic
+    if let Ok(ev_store) = tx.store("events") {
+        if let Ok(index) = ev_store.index("by_topic") {
+            let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
+            if let Ok(records) = index.get_all(key_range.as_ref(), None, None, None).await {
+                for (k, _) in records {
+                    ev_store.delete(&k).await.ok();
                 }
-                return topics;
             }
         }
     }
-    Vec::new()
+    if let Ok(t_store) = tx.store("topics") {
+        t_store.delete(&JsValue::from_str(topic_id)).await.ok();
+    }
+    tx.done().await.ok();
 }
 
-fn save_topics(topics: &[Topic]) {
-    let storage = window()
-        .and_then(|w| w.local_storage().ok())
-        .flatten();
+async fn migrate_from_localstorage(db: &Rexie) {
+    if !load_topic_headers(db).await.is_empty() { return; }
 
-    if let Some(s) = storage {
-        if let Ok(json) = serde_json::to_string(topics) {
-            let _ = s.set_item(STORAGE_KEY, &json);
+    let storage = match window().and_then(|w| w.local_storage().ok()).flatten() {
+        Some(s) => s,
+        None => return,
+    };
+    let json = match storage.get_item(STORAGE_KEY).ok().flatten() {
+        Some(j) => j,
+        None => return,
+    };
+    let old: Vec<Topic> = match serde_json::from_str(&json) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    for mut topic in old {
+        for ev in &mut topic.events {
+            if ev.timestamp_ms == 0.0 {
+                ev.timestamp_ms = js_sys::Date::new(&JsValue::from_str(&ev.timestamp)).get_time();
+            }
+        }
+        let raw_counts = event_counts_raw(&topic.events);
+        let header = TopicHeader {
+            id:          topic.id.clone(),
+            name:        topic.name,
+            count_total: raw_counts.3 as u32,
+            count_today: raw_counts.0 as u32,
+            count_week:  raw_counts.1 as u32,
+            count_month: raw_counts.2 as u32,
+        };
+        save_topic_header(db, &header).await;
+        for ev in topic.events {
+            let row = EventRow {
+                id:           ev.id,
+                topic_id:     topic.id.clone(),
+                timestamp:    ev.timestamp,
+                timestamp_ms: ev.timestamp_ms,
+            };
+            add_event_idb(db, &row).await;
         }
     }
+    storage.remove_item(STORAGE_KEY).ok();
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
 
 fn now_timestamp() -> String {
-    js_sys::Date::new_0()
-        .to_iso_string()
-        .as_string()
-        .unwrap_or_default()
+    js_sys::Date::new_0().to_iso_string().as_string().unwrap_or_default()
 }
 
-// Returns the current local date/time as "YYYY-MM-DDTHH:MM:SS" for datetime-local inputs.
 fn now_local_datetime_str() -> String {
     let d = js_sys::Date::new_0();
     format!(
@@ -100,75 +250,79 @@ fn format_timestamp(iso: &str) -> String {
     let d = js_sys::Date::new(&JsValue::from_str(iso));
     format!(
         "{:02}.{:02}.{} - {:02}:{:02}:{:02}",
-        d.get_date(),
-        d.get_month() + 1,
-        d.get_full_year(),
-        d.get_hours(),
-        d.get_minutes(),
-        d.get_seconds(),
+        d.get_date(), d.get_month() + 1, d.get_full_year(),
+        d.get_hours(), d.get_minutes(), d.get_seconds(),
     )
 }
 
 fn new_id() -> String {
-    let ts = js_sys::Date::now() as u64;
+    let ts   = js_sys::Date::now() as u64;
     let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
     format!("{}-{}", ts, rand)
 }
 
-// Returns (today, week, month, total) counts for a slice of events.
-//
-// Performance: computes three ms-based boundaries with 2 Date objects,
-// then uses pure arithmetic per event — no per-event Date allocation.
-fn event_counts(events: &[TrackedEvent]) -> (usize, usize, usize, usize) {
-    let now = js_sys::Date::new_0();
+fn time_boundaries() -> (f64, f64, f64, f64, f64) {
+    let now    = js_sys::Date::new_0();
     let now_ms = now.get_time();
     let (cy, cm, cd) = (now.get_full_year(), now.get_month() + 1, now.get_date());
-
-    // Local midnight of today as "YYYY-MM-DDTHH:MM:SS" → Date → ms
     let today_start = js_sys::Date::new(
         &JsValue::from_str(&format!("{}-{:02}-{:02}T00:00:00", cy, cm, cd))
     ).get_time();
     let today_end   = today_start + 86_400_000.0;
-
-    // First ms of the current month
     let month_start = js_sys::Date::new(
         &JsValue::from_str(&format!("{}-{:02}-01T00:00:00", cy, cm))
     ).get_time();
+    let week_start  = now_ms - 7.0 * 86_400_000.0;
+    (now_ms, today_start, today_end, month_start, week_start)
+}
 
-    let week_start = now_ms - 7.0 * 86_400_000.0;
-
-    events.iter().fold((0usize, 0usize, 0usize, events.len()), |(t, w, m, total), ev| {
+fn event_counts_raw(events: &[TrackedEvent]) -> (usize, usize, usize, usize) {
+    let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+    events.iter().fold((0, 0, 0, events.len()), |(t, w, m, total), ev| {
         let ms = ev.timestamp_ms;
         (
             t + (ms >= today_start && ms < today_end) as usize,
-            w + (ms >= week_start && ms <= now_ms)    as usize,
+            w + (ms >= week_start  && ms <= now_ms)   as usize,
             m + (ms >= month_start)                    as usize,
             total,
         )
     })
 }
 
-// Parses one line of the import format "YYYY-MM-DD HH:MM:SS.ffffff"
-// into a TrackedEvent with an ISO timestamp (local → UTC).
-fn parse_import_line(line: &str) -> Option<TrackedEvent> {
+fn event_row_counts(events: &[EventRow]) -> (u32, u32, u32, u32) {
+    let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+    let (t, w, m) = events.iter().fold((0u32, 0u32, 0u32), |(t, w, m), ev| {
+        let ms = ev.timestamp_ms;
+        (
+            t + (ms >= today_start && ms < today_end) as u32,
+            w + (ms >= week_start  && ms <= now_ms)   as u32,
+            m + (ms >= month_start)                    as u32,
+        )
+    });
+    (t, w, m, events.len() as u32)
+}
+
+fn parse_import_line(line: &str) -> Option<EventRow> {
     let line = line.trim();
     if line.is_empty() { return None; }
     let (date_part, time_part) = line.split_once(' ')?;
-    // "YYYY-MM-DDTHH:MM:SS.mmm" without 'Z' → parsed as local time by browsers
     let (hms, frac) = time_part.split_once('.').unwrap_or((time_part, "000"));
     let ms_str = format!("{:0<3}", frac);
-    let ms = &ms_str[..ms_str.len().min(3)];
-    let local_iso = format!("{}T{}.{}", date_part, hms, ms);
+    let ms_part = &ms_str[..ms_str.len().min(3)];
+    let local_iso = format!("{}T{}.{}", date_part, hms, ms_part);
     let d = js_sys::Date::new(&JsValue::from_str(&local_iso));
     if d.get_time().is_nan() { return None; }
-    let ms = d.get_time();
-    Some(TrackedEvent { id: new_id(), timestamp: d.to_iso_string().as_string()?, timestamp_ms: ms })
+    let ts_ms = d.get_time();
+    Some(EventRow {
+        id:           new_id(),
+        topic_id:     String::new(), // filled by caller
+        timestamp:    d.to_iso_string().as_string()?,
+        timestamp_ms: ts_ms,
+    })
 }
 
-// Formats events as "YYYY-MM-DD HH:MM:SS.000000" (local time) and triggers
-// a browser download of "<name>.txt".
-fn export_topic(name: &str, events: &[TrackedEvent]) {
-    let mut sorted: Vec<&TrackedEvent> = events.iter().collect();
+fn export_topic(name: &str, events: &[EventRow]) {
+    let mut sorted: Vec<&EventRow> = events.iter().collect();
     sorted.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
     let content: String = sorted.iter().map(|ev| {
@@ -181,14 +335,13 @@ fn export_topic(name: &str, events: &[TrackedEvent]) {
         )
     }).collect();
 
-    let arr = js_sys::Array::new();
+    let arr  = js_sys::Array::new();
     arr.push(&JsValue::from_str(&content));
     let blob = web_sys::Blob::new_with_str_sequence(&arr).unwrap();
-    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+    let url  = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
 
     let doc = window().unwrap().document().unwrap();
-    let a: web_sys::HtmlAnchorElement = doc.create_element("a").unwrap()
-        .dyn_into().unwrap();
+    let a: web_sys::HtmlAnchorElement = doc.create_element("a").unwrap().dyn_into().unwrap();
     a.set_href(&url);
     a.set_download(&format!("{}.txt", name));
     doc.body().unwrap().append_child(&a).unwrap();
@@ -199,42 +352,57 @@ fn export_topic(name: &str, events: &[TrackedEvent]) {
 
 // ─── Components ──────────────────────────────────────────────────────────────
 
-/// Overview row: tapping the main area tracks an event; › navigates to detail.
-/// Receives its own RwSignal<Topic> — memos here re-run only when THIS topic
-/// changes, not when any other topic receives an event.
 #[component]
-fn TopicCard(topic_signal: RwSignal<Topic>) -> impl IntoView {
+fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     let topic_list  = use_context::<TopicList>().expect("topic_list context");
+    let db_ready    = use_context::<DbReady>().expect("db_ready context").0;
     let editing     = use_context::<Editing>().expect("editing context").0;
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
     let add_event = move |_| {
-        topic_signal.update(|t| {
-            t.events.push(TrackedEvent {
-                id: new_id(),
-                timestamp: now_timestamp(),
-                timestamp_ms: js_sys::Date::now(),
+        let Some(db) = get_db() else { return };
+        let _ = db_ready.get_untracked(); // just to acknowledge the signal
+        let topic_id = topic_signal.with_untracked(|h| h.id.clone());
+        let ts       = now_timestamp();
+        let ts_ms    = js_sys::Date::now();
+        let row = EventRow { id: new_id(), topic_id, timestamp: ts, timestamp_ms: ts_ms };
+        let row2 = row.clone();
+        spawn_local(async move {
+            add_event_idb(&db, &row2).await;
+            let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+            let ms = row2.timestamp_ms;
+            topic_signal.update(|h| {
+                h.count_total += 1;
+                if ms >= today_start && ms < today_end  { h.count_today  += 1; }
+                if ms >= week_start  && ms <= now_ms     { h.count_week   += 1; }
+                if ms >= month_start                      { h.count_month  += 1; }
             });
+            save_topic_header(&db, &topic_signal.get_untracked()).await;
         });
     };
 
     let delete_topic = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
-        let id = topic_signal.with_untracked(|t| t.id.clone());
-        topic_list.update(|rows| rows.retain(|s| s.with_untracked(|t| t.id != id)));
+        let id  = topic_signal.with_untracked(|h| h.id.clone());
+        let id2 = id.clone();
+        if let Some(db) = get_db() {
+            spawn_local(async move { delete_topic_idb(&db, &id).await; });
+        }
+        topic_list.update(|rows| rows.retain(|s| s.with_untracked(|h| h.id != id2)));
     };
 
     let go_detail = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
-        let id = topic_signal.with_untracked(|t| t.id.clone());
+        let id = topic_signal.with_untracked(|h| h.id.clone());
         detail_id.set(id);
         show_detail.set(true);
     };
 
-    // These memos subscribe only to topic_signal, not to any other topic.
-    let topic_name = Memo::new(move |_| topic_signal.with(|t| t.name.clone()));
-    let counts     = Memo::new(move |_| topic_signal.with(|t| event_counts(&t.events)));
+    let topic_name = Memo::new(move |_| topic_signal.with(|h| h.name.clone()));
+    let counts     = Memo::new(move |_| topic_signal.with(|h| {
+        (h.count_today, h.count_week, h.count_month, h.count_total)
+    }));
 
     view! {
         <div class="topic-row">
@@ -258,94 +426,124 @@ fn TopicCard(topic_signal: RwSignal<Topic>) -> impl IntoView {
     }
 }
 
-/// Full-screen detail view for one topic.
 #[component]
 fn TopicDetail() -> impl IntoView {
     let topic_list  = use_context::<TopicList>().expect("topic_list context");
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
-    let show_add_modal = RwSignal::new(false);
-    let manual_dt      = RwSignal::new(String::new());
-    let swiped_id: RwSignal<Option<String>> = RwSignal::new(None);
+    let show_add_modal: RwSignal<bool>           = RwSignal::new(false);
+    let manual_dt:      RwSignal<String>         = RwSignal::new(String::new());
+    let swiped_id:      RwSignal<Option<String>> = RwSignal::new(None);
+
+    let events:   RwSignal<Vec<EventRow>> = RwSignal::new(Vec::new());
+    let loading:  RwSignal<bool>          = RwSignal::new(false);
+    let page_end: RwSignal<usize>         = RwSignal::new(PAGE_SIZE);
+    let all_evs:  StoredValue<Vec<EventRow>> = StoredValue::new(Vec::new());
 
     let go_back = move |_: leptos::ev::MouseEvent| { show_detail.set(false); };
 
-    // Finds the inner signal for the currently-viewed topic.
-    // Uses with_untracked on inner signals during the search so we don't
-    // subscribe to every topic just to find the right one.
-    let current_sig = Memo::new(move |_| {
+    // Find the header signal for the currently-viewed topic.
+    let current_header = Memo::new(move |_| {
         let id = detail_id.get();
         topic_list.with(|rows| {
             rows.iter()
-                .find(|s| s.with_untracked(|t| t.id == id))
+                .find(|s| s.with_untracked(|h| h.id == id))
                 .copied()
         })
     });
 
-    // These memos subscribe to current_sig (re-run on topic switch) AND to the
-    // inner signal (re-run when THIS topic's data changes, not other topics).
     let topic_name = Memo::new(move |_| {
-        current_sig.get()
-            .map(|sig| sig.with(|t| t.name.clone()))
+        current_header.get()
+            .map(|sig| sig.with(|h| h.name.clone()))
             .unwrap_or_default()
     });
 
-    let display_events = Memo::new(move |_| {
-        let mut evs = current_sig.get()
-            .map(|sig| sig.with(|t| t.events.clone()))
-            .unwrap_or_default();
-        evs.reverse();
-        evs
+    // Load events from IDB whenever the viewed topic changes.
+    Effect::new(move |_| {
+        let topic_id = detail_id.get();
+        if topic_id.is_empty() { return; }
+        let Some(db) = get_db() else { return };
+        events.set(Vec::new());
+        all_evs.set_value(Vec::new());
+        page_end.set(PAGE_SIZE);
+        loading.set(true);
+        spawn_local(async move {
+            let loaded = load_events_for_topic(&db, &topic_id).await;
+            let page   = loaded[..PAGE_SIZE.min(loaded.len())].to_vec();
+            all_evs.set_value(loaded);
+            events.set(page);
+            loading.set(false);
+        });
     });
 
-    let do_export = move |_: leptos::ev::MouseEvent| {
-        if let Some(sig) = current_sig.get_untracked() {
-            sig.with_untracked(|t| export_topic(&t.name, &t.events));
-        }
+    let load_more = move |_: leptos::ev::MouseEvent| {
+        let next  = page_end.get() + PAGE_SIZE;
+        let slice = all_evs.with_value(|v| v[..next.min(v.len())].to_vec());
+        events.set(slice);
+        page_end.set(next);
     };
 
-    let open_add_modal = move |_: leptos::ev::MouseEvent| {
+    let has_more = move || all_evs.with_value(|v| page_end.get() < v.len());
+
+    let do_export = move |_: leptos::ev::MouseEvent| {
+        let name = topic_name.get_untracked();
+        all_evs.with_value(|v| export_topic(&name, v));
+    };
+
+    let open_add_modal  = move |_: leptos::ev::MouseEvent| {
         manual_dt.set(now_local_datetime_str());
         show_add_modal.set(true);
     };
-
     let close_add_modal = move |_: leptos::ev::MouseEvent| { show_add_modal.set(false); };
 
     let add_manual_event = move |_: leptos::ev::MouseEvent| {
         let dt_str = manual_dt.get();
         let d = js_sys::Date::new(&JsValue::from_str(&dt_str));
         if !d.get_time().is_nan() {
-            let iso = d.to_iso_string().as_string().unwrap_or_default();
-            let ms  = d.get_time();
-            if let Some(sig) = current_sig.get_untracked() {
-                sig.update(|t| {
-                    t.events.push(TrackedEvent { id: new_id(), timestamp: iso, timestamp_ms: ms });
+            let iso   = d.to_iso_string().as_string().unwrap_or_default();
+            let ts_ms = d.get_time();
+            let topic_id = detail_id.get_untracked();
+            let row = EventRow { id: new_id(), topic_id, timestamp: iso, timestamp_ms: ts_ms };
+            // Optimistic UI update
+            events.update(|evs| evs.insert(0, row.clone()));
+            all_evs.update_value(|v| v.insert(0, row.clone()));
+            if let Some(db) = get_db() {
+                let row2 = row.clone();
+                spawn_local(async move {
+                    add_event_idb(&db, &row2).await;
+                    let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+                    let ms = row2.timestamp_ms;
+                    if let Some(sig) = current_header.get_untracked() {
+                        sig.update(|h| {
+                            h.count_total += 1;
+                            if ms >= today_start && ms < today_end  { h.count_today  += 1; }
+                            if ms >= week_start  && ms <= now_ms     { h.count_week   += 1; }
+                            if ms >= month_start                      { h.count_month  += 1; }
+                        });
+                        save_topic_header(&db, &sig.get_untracked()).await;
+                    }
                 });
             }
         }
         show_add_modal.set(false);
     };
 
-    // Swipe-back gesture: start within 40 px of the left edge, drag right ≥ 50 px.
+    // Swipe-back gesture (right edge → navigate back)
     let touch_start_x = StoredValue::new(0.0f64);
     let touch_start_y = StoredValue::new(0.0f64);
-
     let on_touch_start = move |ev: web_sys::TouchEvent| {
         if let Some(t) = ev.touches().get(0) {
             touch_start_x.set_value(t.client_x() as f64);
             touch_start_y.set_value(t.client_y() as f64);
         }
     };
-
     let on_touch_end = move |ev: web_sys::TouchEvent| {
         if let Some(t) = ev.changed_touches().get(0) {
             let sx = touch_start_x.get_value();
             let dx = t.client_x() as f64 - sx;
             let dy = (t.client_y() as f64 - touch_start_y.get_value()).abs();
-            if sx < 40.0 && dx > 50.0 && dx > dy {
-                show_detail.set(false);
-            }
+            if sx < 40.0 && dx > 50.0 && dx > dy { show_detail.set(false); }
         }
     };
 
@@ -357,97 +555,109 @@ fn TopicDetail() -> impl IntoView {
         >
             <header class="app-header">
                 <div class="header-bar">
-                    <button class="header-btn header-btn-back" on:click=go_back>
-                        "‹ Back"
-                    </button>
+                    <button class="header-btn header-btn-back" on:click=go_back>"‹ Back"</button>
                     <h1>{topic_name}</h1>
                     <div class="header-right">
-                        <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">
-                            "↓"
-                        </button>
-                        <button class="header-btn header-btn-right" on:click=open_add_modal title="Log event manually">
-                            "+"
-                        </button>
+                        <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">"↓"</button>
+                        <button class="header-btn header-btn-right" on:click=open_add_modal title="Log event manually">"+"</button>
                     </div>
                 </div>
             </header>
             <main class="app-main app-main--detail">
                 <div class="event-card">
+                    <Show when=move || loading.get()>
+                        <div class="loading-indicator">"Loading…"</div>
+                    </Show>
                     <ul class="event-list" on:click=move |_| swiped_id.set(None)>
-                        <Show
-                            when=move || display_events.get().is_empty()
-                            fallback=move || view! {
-                                <For
-                                    each=move || display_events.get()
-                                    key=|ev| ev.id.clone()
-                                    children=move |ev| {
-                                        let eid        = StoredValue::new(ev.id.clone());
-                                        let ts_str     = ev.timestamp.clone();
-                                        let swipe_tx_x = StoredValue::new(0.0f64);
-
-                                        let on_touch_start = move |te: web_sys::TouchEvent| {
-                                            if let Some(t) = te.touches().get(0) {
-                                                swipe_tx_x.set_value(t.client_x() as f64);
-                                            }
-                                        };
-                                        let on_touch_end = move |te: web_sys::TouchEvent| {
-                                            if let Some(t) = te.changed_touches().get(0) {
-                                                let dx = t.client_x() as f64 - swipe_tx_x.get_value();
-                                                eid.with_value(|id| {
-                                                    if dx < -50.0 {
-                                                        swiped_id.set(Some(id.clone()));
-                                                    } else if dx > 20.0 && swiped_id.get().as_deref() == Some(id) {
-                                                        swiped_id.set(None);
-                                                    }
-                                                });
-                                            }
-                                        };
-                                        let delete_event = move |me: leptos::ev::MouseEvent| {
-                                            me.stop_propagation();
-                                            if let Some(sig) = current_sig.get_untracked() {
-                                                sig.update(|t| {
-                                                    eid.with_value(|eid| t.events.retain(|e| e.id != *eid));
-                                                });
-                                            }
-                                            swiped_id.set(None);
-                                        };
-                                        let is_swiped = move || {
-                                            eid.with_value(|id| swiped_id.get().as_deref() == Some(id))
-                                        };
-
-                                        view! {
-                                            <li
-                                                class="event-item"
-                                                class:swiped=is_swiped
-                                                on:touchstart=on_touch_start
-                                                on:touchend=on_touch_end
-                                            >
-                                                <div class="event-item-content">
-                                                    <span class="event-icon">"🕐"</span>
-                                                    <span class="event-time">{format_timestamp(&ts_str)}</span>
-                                                </div>
-                                                <button
-                                                    class="btn-delete-swipe"
-                                                    on:click=delete_event
-                                                    on:touchend=|te: web_sys::TouchEvent| te.stop_propagation()
-                                                >
-                                                    "Delete"
-                                                </button>
-                                            </li>
-                                        }
-                                    }
-                                />
-                            }
-                        >
-                            <li class="event-empty">
-                                "No events yet — tap the topic row to log one."
-                            </li>
+                        <Show when=move || !loading.get() && events.get().is_empty()>
+                            <li class="event-empty">"No events yet — tap the topic row to log one."</li>
                         </Show>
+                        <For
+                            each=move || events.get()
+                            key=|ev| ev.id.clone()
+                            children=move |ev| {
+                                let eid        = StoredValue::new(ev.id.clone());
+                                let ts_str     = ev.timestamp.clone();
+                                let swipe_tx_x = StoredValue::new(0.0f64);
+
+                                let on_touch_start_row = move |te: web_sys::TouchEvent| {
+                                    if let Some(t) = te.touches().get(0) {
+                                        swipe_tx_x.set_value(t.client_x() as f64);
+                                    }
+                                };
+                                let on_touch_end_row = move |te: web_sys::TouchEvent| {
+                                    if let Some(t) = te.changed_touches().get(0) {
+                                        let dx = t.client_x() as f64 - swipe_tx_x.get_value();
+                                        eid.with_value(|id| {
+                                            if dx < -50.0 {
+                                                swiped_id.set(Some(id.clone()));
+                                            } else if dx > 20.0 && swiped_id.get().as_deref() == Some(id) {
+                                                swiped_id.set(None);
+                                            }
+                                        });
+                                    }
+                                };
+
+                                let delete_event = move |me: leptos::ev::MouseEvent| {
+                                    me.stop_propagation();
+                                    let eid_val = eid.get_value();
+                                    // Optimistic remove
+                                    events.update(|evs| evs.retain(|e| e.id != eid_val));
+                                    all_evs.update_value(|v| v.retain(|e| e.id != eid_val));
+                                    swiped_id.set(None);
+                                    if let Some(db) = get_db() {
+                                        let eid_val2 = eid_val.clone();
+                                        spawn_local(async move {
+                                            delete_event_idb(&db, &eid_val2).await;
+                                            if let Some(sig) = current_header.get_untracked() {
+                                                let counts = all_evs.with_value(|v| event_row_counts(v));
+                                                sig.update(|h| {
+                                                    h.count_total = counts.3;
+                                                    h.count_today = counts.0;
+                                                    h.count_week  = counts.1;
+                                                    h.count_month = counts.2;
+                                                });
+                                                save_topic_header(&db, &sig.get_untracked()).await;
+                                            }
+                                        });
+                                    }
+                                };
+
+                                let is_swiped = move || {
+                                    eid.with_value(|id| swiped_id.get().as_deref() == Some(id))
+                                };
+
+                                view! {
+                                    <li
+                                        class="event-item"
+                                        class:swiped=is_swiped
+                                        on:touchstart=on_touch_start_row
+                                        on:touchend=on_touch_end_row
+                                    >
+                                        <div class="event-item-content">
+                                            <span class="event-icon">"🕐"</span>
+                                            <span class="event-time">{format_timestamp(&ts_str)}</span>
+                                        </div>
+                                        <button
+                                            class="btn-delete-swipe"
+                                            on:click=delete_event
+                                            on:touchend=|te: web_sys::TouchEvent| te.stop_propagation()
+                                        >
+                                            "Delete"
+                                        </button>
+                                    </li>
+                                }
+                            }
+                        />
                     </ul>
+                    <Show when=has_more>
+                        <button class="btn-load-more" on:click=load_more>
+                            "Load more"
+                        </button>
+                    </Show>
                 </div>
             </main>
 
-            // ── Manual-event modal ─────────────────────────────────────────────
             <Show when=move || show_add_modal.get()>
                 <div class="modal-backdrop" on:click=close_add_modal>
                     <div class="modal-sheet" on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()>
@@ -472,11 +682,8 @@ fn TopicDetail() -> impl IntoView {
 
 #[component]
 fn App() -> impl IntoView {
-    // Create per-topic signals: the outer list changes only on add/remove,
-    // each inner RwSignal<Topic> changes only for that topic's own data.
-    let topic_list: TopicList = RwSignal::new(
-        load_topics().into_iter().map(RwSignal::new).collect()
-    );
+    let topic_list: TopicList   = RwSignal::new(Vec::new());
+    let db_ready_signal         = RwSignal::new(false);
 
     let (new_name, set_new_name) = signal(String::new());
     let editing     = RwSignal::new(false);
@@ -484,29 +691,18 @@ fn App() -> impl IntoView {
     let show_detail: RwSignal<bool>   = RwSignal::new(false);
     let detail_id:   RwSignal<String> = RwSignal::new(String::new());
 
-    // Debounced save: coalesce rapid updates into one localStorage write 500 ms
-    // after the last change.  Reads all inner signals so it re-runs on any change.
-    let save_timer: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
-    Effect::new(move |_| {
-        let snap: Vec<Topic> = topic_list.with(|rows| rows.iter().map(|s| s.get()).collect());
-        let win = window().unwrap();
-        let prev = save_timer.get();
-        if prev >= 0 { win.clear_timeout_with_handle(prev); }
-        let timer_clone = save_timer.clone();
-        let cb = Closure::once_into_js(move || {
-            save_topics(&snap);
-            timer_clone.set(-1);
-        });
-        match win.set_timeout_with_callback_and_timeout_and_arguments_0(cb.unchecked_ref(), 500) {
-            Ok(id) => save_timer.set(id),
-            Err(_) => {
-                let snap2: Vec<Topic> = topic_list.with(|rows| rows.iter().map(|s| s.get_untracked()).collect());
-                save_topics(&snap2);
-            }
-        }
+    // Open IDB asynchronously, migrate from localStorage if needed.
+    spawn_local(async move {
+        let db = open_db().await;
+        migrate_from_localstorage(&db).await;
+        let headers = load_topic_headers(&db).await;
+        DB.with(|cell| *cell.borrow_mut() = Some(db));
+        topic_list.set(headers.into_iter().map(RwSignal::new).collect());
+        db_ready_signal.set(true);
     });
 
     provide_context(topic_list);
+    provide_context(DbReady(db_ready_signal));
     provide_context(Editing(editing));
     provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
@@ -517,36 +713,74 @@ fn App() -> impl IntoView {
         if files.length() == 0 { return; }
         let file = files.get(0).unwrap();
 
-        let filename = file.name();
+        let filename   = file.name();
         let topic_name = filename.strip_suffix(".txt").unwrap_or(&filename).to_string();
 
-        let reader = web_sys::FileReader::new().unwrap();
+        let reader       = web_sys::FileReader::new().unwrap();
         let reader_clone = reader.clone();
 
         let on_load = Closure::once(move |_: JsValue| {
             let text = reader_clone.result().unwrap().as_string().unwrap();
-            let new_events: Vec<TrackedEvent> = text.lines()
+            let new_rows: Vec<EventRow> = text.lines()
                 .filter_map(parse_import_line)
                 .collect();
 
-            // Find existing topic by name (untracked search to avoid subscriptions).
+            let Some(db) = get_db() else { return };
+
             let existing_sig = topic_list.with_untracked(|rows| {
                 rows.iter()
-                    .find(|s| s.with_untracked(|t| t.name == topic_name))
+                    .find(|s| s.with_untracked(|h| h.name == topic_name))
                     .copied()
             });
 
             if let Some(sig) = existing_sig {
-                sig.update(|t| {
-                    for ev in new_events {
-                        if !t.events.iter().any(|e| e.timestamp == ev.timestamp) {
-                            t.events.push(ev);
+                let topic_id = sig.with_untracked(|h| h.id.clone());
+                spawn_local(async move {
+                    let existing = load_events_for_topic(&db, &topic_id).await;
+                    let existing_ts: std::collections::HashSet<String> =
+                        existing.iter().map(|e| e.timestamp.clone()).collect();
+                    let mut all = existing;
+                    for mut row in new_rows {
+                        if !existing_ts.contains(&row.timestamp) {
+                            row.topic_id = topic_id.clone();
+                            add_event_idb(&db, &row).await;
+                            all.push(row);
                         }
                     }
+                    let counts = event_row_counts(&all);
+                    sig.update(|h| {
+                        h.count_total = counts.3;
+                        h.count_today = counts.0;
+                        h.count_week  = counts.1;
+                        h.count_month = counts.2;
+                    });
+                    save_topic_header(&db, &sig.get_untracked()).await;
                 });
             } else {
-                let new_topic = Topic { id: new_id(), name: topic_name, events: new_events };
-                topic_list.update(|rows| rows.push(RwSignal::new(new_topic)));
+                let topic_id   = new_id();
+                let tid2       = topic_id.clone();
+                let name2      = topic_name.clone();
+                let rows_clone = new_rows.clone();
+                spawn_local(async move {
+                    let rows_with_topic: Vec<EventRow> = rows_clone.into_iter()
+                        .map(|mut r| { r.topic_id = tid2.clone(); r })
+                        .collect();
+                    let counts = event_row_counts(&rows_with_topic);
+                    let header = TopicHeader {
+                        id:          tid2.clone(),
+                        name:        name2,
+                        count_total: counts.3,
+                        count_today: counts.0,
+                        count_week:  counts.1,
+                        count_month: counts.2,
+                    };
+                    save_topic_header(&db, &header).await;
+                    for row in rows_with_topic {
+                        add_event_idb(&db, &row).await;
+                    }
+                    let header_sig = RwSignal::new(header);
+                    topic_list.update(|rows| rows.push(header_sig));
+                });
             }
         });
 
@@ -559,12 +793,22 @@ fn App() -> impl IntoView {
     let add_topic = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let name = new_name.get().trim().to_string();
-        if !name.is_empty() {
-            let new_topic = Topic { id: new_id(), name, events: Vec::new() };
-            topic_list.update(|rows| rows.push(RwSignal::new(new_topic)));
-            set_new_name.set(String::new());
-            adding.set(false);
+        if name.is_empty() { return; }
+        let header = TopicHeader {
+            id:          new_id(),
+            name,
+            count_total: 0,
+            count_today: 0,
+            count_week:  0,
+            count_month: 0,
+        };
+        if let Some(db) = get_db() {
+            let h2 = header.clone();
+            spawn_local(async move { save_topic_header(&db, &h2).await; });
         }
+        topic_list.update(|rows| rows.push(RwSignal::new(header)));
+        set_new_name.set(String::new());
+        adding.set(false);
     };
 
     view! {
@@ -615,21 +859,20 @@ fn App() -> impl IntoView {
                 </header>
                 <main class="app-main">
                     <div class="topic-list">
-                        <Show
-                            when=move || topic_list.get().is_empty()
-                            fallback=move || view! {
-                                <For
-                                    each=move || topic_list.get()
-                                    key=|sig| sig.with_untracked(|t| t.id.clone())
-                                    children=|sig| view! { <TopicCard topic_signal=sig /> }
-                                />
-                            }
-                        >
+                        <Show when=move || !db_ready_signal.get()>
+                            <div class="loading-indicator">"Loading…"</div>
+                        </Show>
+                        <Show when=move || db_ready_signal.get() && topic_list.get().is_empty()>
                             <div class="empty-state">
                                 <p>"No topics yet."</p>
                                 <p>"Tap \"+\" to add one."</p>
                             </div>
                         </Show>
+                        <For
+                            each=move || topic_list.get()
+                            key=|sig| sig.with_untracked(|h| h.id.clone())
+                            children=|sig| view! { <TopicCard topic_signal=sig /> }
+                        />
                     </div>
                 </main>
             </div>
