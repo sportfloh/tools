@@ -563,6 +563,12 @@ html, body {
   font-size: 0.95rem;
 }
 
+/* Re-invert the header under Smart Invert so it keeps its dark-gray look.
+ * filter:invert(1) cancels out the OS-level inversion for this element only. */
+@media (inverted-colors: inverted) {
+  .app-header { filter: invert(1); }
+}
+
 /* light CSS + OS inversion → perceived dark; native UI should follow */
 @media (prefers-color-scheme: light) and (inverted-colors: inverted) {
   :root { color-scheme: dark; }
