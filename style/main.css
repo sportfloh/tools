@@ -340,43 +340,56 @@ html, body {
 }
 
 .event-item {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid var(--color-border);
+}
+.event-item:last-child { border-bottom: none; }
+
+/* Slides left to reveal the delete button on swipe */
+.event-item-content {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 12px 16px;
   font-size: .875rem;
   color: var(--color-text);
-  border-bottom: 1px solid var(--color-border);
   font-variant-numeric: tabular-nums;
+  background: var(--color-surface);
+  transition: transform .25s ease;
 }
-.event-item:last-child { border-bottom: none; }
+.event-item.swiped .event-item-content {
+  transform: translateX(-80px);
+}
 
 .event-time { flex: 1; }
 .event-icon { font-size: .85rem; opacity: .6; flex-shrink: 0; }
 
-.btn-delete-event {
-  background: transparent;
+/* Delete button revealed by swipe (or hover on pointer devices) */
+.btn-delete-swipe {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 80px;
+  background: var(--color-danger);
+  color: white;
   border: none;
-  color: var(--color-muted);
+  font-size: .875rem;
+  font-weight: 600;
   cursor: pointer;
-  font-size: .75rem;
-  padding: 4px 8px;
-  border-radius: 4px;
-  line-height: 1;
-  opacity: 0;
-  min-width: 32px;
-  min-height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity .15s, color .15s;
+  transform: translateX(100%);
+  transition: transform .25s ease;
   -webkit-tap-highlight-color: transparent;
 }
-.event-item:hover .btn-delete-event { opacity: 1; }
-.btn-delete-event:hover { color: var(--color-danger); }
-/* Always show on touch devices */
-@media (hover: none) {
-  .btn-delete-event { opacity: 1; }
+.event-item.swiped .btn-delete-swipe {
+  transform: translateX(0);
+}
+@media (hover: hover) {
+  .event-item:hover .btn-delete-swipe { transform: translateX(0); }
 }
 
 .event-empty {

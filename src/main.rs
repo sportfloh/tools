@@ -248,6 +248,7 @@ fn TopicDetail() -> impl IntoView {
 
     let show_add_modal = RwSignal::new(false);
     let manual_dt      = RwSignal::new(String::new());
+    let swiped_id: RwSignal<Option<String>> = RwSignal::new(None);
 
     let go_back = move |_: leptos::ev::MouseEvent| { show_detail.set(false); };
 
@@ -342,7 +343,7 @@ fn TopicDetail() -> impl IntoView {
             </header>
             <main class="app-main app-main--detail">
                 <div class="event-card">
-                    <ul class="event-list">
+                    <ul class="event-list" on:click=move |_| swiped_id.set(None)>
                         <Show
                             when=move || display_events.get().is_empty()
                             fallback=move || view! {
@@ -350,20 +351,59 @@ fn TopicDetail() -> impl IntoView {
                                     each=move || display_events.get()
                                     key=|ev| ev.id.clone()
                                     children=move |ev| {
-                                        let eid = StoredValue::new(ev.id.clone());
-                                        let delete_event = move |_| {
+                                        let eid        = StoredValue::new(ev.id.clone());
+                                        let ts_str     = ev.timestamp.clone();
+                                        let swipe_tx_x = StoredValue::new(0.0f64);
+
+                                        let on_touch_start = move |te: web_sys::TouchEvent| {
+                                            if let Some(t) = te.touches().get(0) {
+                                                swipe_tx_x.set_value(t.client_x() as f64);
+                                            }
+                                        };
+                                        let on_touch_end = move |te: web_sys::TouchEvent| {
+                                            if let Some(t) = te.changed_touches().get(0) {
+                                                let dx = t.client_x() as f64 - swipe_tx_x.get_value();
+                                                eid.with_value(|id| {
+                                                    if dx < -50.0 {
+                                                        swiped_id.set(Some(id.clone()));
+                                                    } else if dx > 20.0 && swiped_id.get().as_deref() == Some(id) {
+                                                        swiped_id.set(None);
+                                                    }
+                                                });
+                                            }
+                                        };
+                                        let delete_event = move |me: leptos::ev::MouseEvent| {
+                                            me.stop_propagation();
                                             let id = detail_id.get();
                                             topics.update(|ts| {
                                                 if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
                                                     eid.with_value(|eid| t.events.retain(|e| e.id != *eid));
                                                 }
                                             });
+                                            swiped_id.set(None);
                                         };
+                                        let is_swiped = move || {
+                                            eid.with_value(|id| swiped_id.get().as_deref() == Some(id))
+                                        };
+
                                         view! {
-                                            <li class="event-item">
-                                                <span class="event-icon">"🕐"</span>
-                                                <span class="event-time">{format_timestamp(&ev.timestamp)}</span>
-                                                <button class="btn-delete-event" on:click=delete_event title="Delete">"✕"</button>
+                                            <li
+                                                class="event-item"
+                                                class:swiped=is_swiped
+                                                on:touchstart=on_touch_start
+                                                on:touchend=on_touch_end
+                                            >
+                                                <div class="event-item-content">
+                                                    <span class="event-icon">"🕐"</span>
+                                                    <span class="event-time">{format_timestamp(&ts_str)}</span>
+                                                </div>
+                                                <button
+                                                    class="btn-delete-swipe"
+                                                    on:click=delete_event
+                                                    on:touchend=|te: web_sys::TouchEvent| te.stop_propagation()
+                                                >
+                                                    "Delete"
+                                                </button>
                                             </li>
                                         }
                                     }
