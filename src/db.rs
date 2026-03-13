@@ -157,8 +157,10 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
     {
         let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
         if let Ok(records) = index.get_all(key_range.as_ref(), None, None, None).await {
-            for (k, _) in records {
-                ev_store.delete(&k).await.ok();
+            for (_k, v) in records {
+                if let Ok(row) = serde_wasm_bindgen::from_value::<EventRow>(v) {
+                    ev_store.delete(&JsValue::from_str(&row.id)).await.ok();
+                }
             }
         }
     }
