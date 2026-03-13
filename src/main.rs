@@ -820,12 +820,17 @@ fn App() -> impl IntoView {
             >
                 <header class="app-header">
                     <div class="header-bar">
-                        <button
-                            class="header-btn header-btn-left"
-                            on:click=move |_| editing.update(|e| *e = !*e)
+                        <Show
+                            when=move || !topic_list.get().is_empty()
+                            fallback=|| view! { <div class="header-btn header-btn-left"></div> }
                         >
-                            {move || if editing.get() { "Done" } else { "Edit" }}
-                        </button>
+                            <button
+                                class="header-btn header-btn-left"
+                                on:click=move |_| editing.update(|e| *e = !*e)
+                            >
+                                {move || if editing.get() { "Done" } else { "Edit" }}
+                            </button>
+                        </Show>
                         <h1>"trackit"</h1>
                         <div class="header-right">
                             <label class="header-btn header-btn-import" title="Import from .txt">
