@@ -16,7 +16,9 @@ cargo fmt
 
 # Lint (target must be specified — this is WASM-only)
 cargo clippy --target wasm32-unknown-unknown -- -D warnings
-```
+
+# Run native unit tests
+cargo test --lib
 
 The pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt` then `cargo clippy`. Activate it once per clone:
 
@@ -26,12 +28,31 @@ git config core.hooksPath .githooks
 
 ## Tests
 
-There are currently **no automated tests**. The WASM-only target makes standard `cargo test` impractical for most logic; browser-side behaviour is verified manually.
+```sh
+# Native unit tests (no WASM toolchain needed)
+cargo test --lib
 
-If tests are added in the future:
-- Pure logic (e.g. timestamp parsing in `src/time.rs`) can be unit-tested with `cargo test --lib`
-- Browser/IDB integration tests would require `wasm-pack test --headless --firefox` (or `--chrome`)
-- Add the relevant run command to the Commands section above and update the Self-Maintenance Rule below
+# WASM integration tests (requires Chrome or Firefox)
+wasm-pack test --headless --chrome
+```
+
+### Current coverage (8 native + 3 WASM tests, all in `src/time.rs`)
+
+| Test | Kind | What it checks |
+|------|------|----------------|
+| `empty_events_all_zero` | native | `event_row_counts` returns all zeros for empty input |
+| `event_in_today_counts_all_periods` | native | event at now counts in today, week, month, total |
+| `event_yesterday_not_today_but_in_week_and_month` | native | 24 h old event skips today, hits week + month |
+| `event_eight_days_ago_only_in_month` | native | >7 days old skips week, still in month |
+| `event_before_month_start_only_in_total` | native | event before month start only hits total |
+| `mixed_events_correct_counts` | native | combination of all boundary cases |
+| `topic_header_serde_round_trip` | native | `TopicHeader` serialises and deserialises correctly |
+| `event_row_serde_round_trip` | native | `EventRow` serialises and deserialises correctly |
+| `parse_valid_import_line` | WASM | valid timestamp line parses to an `EventRow` |
+| `parse_empty_import_line_returns_none` | WASM | empty / blank lines return `None` |
+| `parse_malformed_import_line_returns_none` | WASM | bad input returns `None` |
+
+> **Note:** `time_boundaries()` and `format_timestamp()` are not unit-tested — they depend on `js_sys::Date` and require the WASM runtime. Covered manually.
 
 ## Source modules
 
