@@ -242,8 +242,10 @@ fn time_boundaries() -> (f64, f64, f64, f64, f64) {
     (now_ms, today_start, today_end, month_start, week_start)
 }
 
-fn event_row_counts(events: &[EventRow]) -> (u32, u32, u32, u32) {
-    let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+fn event_row_counts(
+    events: &[EventRow],
+    (now_ms, today_start, today_end, month_start, week_start): (f64, f64, f64, f64, f64),
+) -> (u32, u32, u32, u32) {
     let (t, w, m) = events.iter().fold((0u32, 0u32, 0u32), |(t, w, m), ev| {
         let ms = ev.timestamp_ms;
         (
@@ -608,7 +610,7 @@ fn TopicDetail() -> impl IntoView {
                                         spawn_local(async move {
                                             delete_event_idb(&db, &eid_val2).await;
                                             if let Some(sig) = current_header.get_untracked() {
-                                                let counts = all_evs.with_value(|v| event_row_counts(v));
+                                                let counts = all_evs.with_value(|v| event_row_counts(v, time_boundaries()));
                                                 sig.update(|h| {
                                                     h.count_total = counts.3;
                                                     h.count_today = counts.0;
@@ -746,7 +748,7 @@ fn App() -> impl IntoView {
                             all.push(row);
                         }
                     }
-                    let counts = event_row_counts(&all);
+                    let counts = event_row_counts(&all, time_boundaries());
                     sig.update(|h| {
                         h.count_total = counts.3;
                         h.count_today = counts.0;
@@ -768,7 +770,7 @@ fn App() -> impl IntoView {
                             r
                         })
                         .collect();
-                    let counts = event_row_counts(&rows_with_topic);
+                    let counts = event_row_counts(&rows_with_topic, time_boundaries());
                     let header = TopicHeader {
                         id: tid2.clone(),
                         name: name2,
@@ -903,4 +905,225 @@ fn App() -> impl IntoView {
 fn main() {
     console_error_panic_hook::set_once();
     leptos::mount::mount_to_body(|| view! { <App /> });
+}
+
+// ─── Unit tests ───────────────────────────────────────────────────────────────
+//
+// Run with: cargo test  (native target — no WASM toolchain needed)
+//
+// time_boundaries() is WASM-only (uses js_sys::Date), so tests construct the
+// bounds tuple manually with known epoch-millisecond values.
+#[cfg(test)]
+mod tests {
+    use super::{event_row_counts, EventRow, TopicHeader};
+
+    // 2023-11-15 12:00:00 UTC  →  1_700_046_000_000 ms since epoch
+    const NOW: f64 = 1_700_046_000_000.0;
+    // 2023-11-15 00:00:00 UTC
+    const TODAY_START: f64 = 1_700_006_400_000.0;
+    const TODAY_END: f64 = TODAY_START + 86_400_000.0;
+    // rolling 7 days
+    const WEEK_START: f64 = NOW - 7.0 * 86_400_000.0;
+    // 2023-11-01 00:00:00 UTC
+    const MONTH_START: f64 = 1_698_796_800_000.0;
+
+    fn bounds() -> (f64, f64, f64, f64, f64) {
+        (NOW, TODAY_START, TODAY_END, MONTH_START, WEEK_START)
+    }
+
+    fn ev(ts_ms: f64) -> EventRow {
+        EventRow {
+            id: "x".into(),
+            topic_id: "t".into(),
+            timestamp: "".into(),
+            timestamp_ms: ts_ms,
+        }
+    }
+
+    #[test]
+    fn empty_events_all_zero() {
+        let (today, week, month, total) = event_row_counts(&[], bounds());
+        assert_eq!((today, week, month, total), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn event_in_today_counts_all_periods() {
+        // An event timestamped at noon today is inside today, week, and month.
+        let events = vec![ev(NOW)];
+        let (today, week, month, total) = event_row_counts(&events, bounds());
+        assert_eq!(today, 1);
+        assert_eq!(week, 1);
+        assert_eq!(month, 1);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn event_yesterday_not_today_but_in_week_and_month() {
+        let yesterday = NOW - 86_400_000.0; // 24 h ago, inside 7-day window
+        let events = vec![ev(yesterday)];
+        let (today, week, month, total) = event_row_counts(&events, bounds());
+        assert_eq!(today, 0);
+        assert_eq!(week, 1);
+        assert_eq!(month, 1);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn event_eight_days_ago_only_in_month() {
+        let old = NOW - 8.0 * 86_400_000.0; // outside 7-day window, inside month
+        let events = vec![ev(old)];
+        let (today, week, month, total) = event_row_counts(&events, bounds());
+        assert_eq!(today, 0);
+        assert_eq!(week, 0);
+        assert_eq!(month, 1);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn event_before_month_start_only_in_total() {
+        let ancient = MONTH_START - 1.0;
+        let events = vec![ev(ancient)];
+        let (today, week, month, total) = event_row_counts(&events, bounds());
+        assert_eq!(today, 0);
+        assert_eq!(week, 0);
+        assert_eq!(month, 0);
+        assert_eq!(total, 1);
+    }
+
+    #[test]
+    fn mixed_events_correct_counts() {
+        let events = vec![
+            ev(NOW),                         // today + week + month
+            ev(NOW - 86_400_000.0),          // week + month
+            ev(NOW - 8.0 * 86_400_000.0),    // month only
+            ev(MONTH_START - 1.0),           // none
+        ];
+        let (today, week, month, total) = event_row_counts(&events, bounds());
+        assert_eq!(today, 1);
+        assert_eq!(week, 2);
+        assert_eq!(month, 3);
+        assert_eq!(total, 4);
+    }
+
+    #[test]
+    fn topic_header_serde_round_trip() {
+        let h = TopicHeader {
+            id: "abc".into(),
+            name: "Running".into(),
+            count_total: 42,
+            count_today: 1,
+            count_week: 5,
+            count_month: 10,
+        };
+        let json = serde_json::to_string(&h).unwrap();
+        let h2: TopicHeader = serde_json::from_str(&json).unwrap();
+        assert_eq!(h, h2);
+    }
+
+    #[test]
+    fn event_row_serde_round_trip() {
+        let e = EventRow {
+            id: "e1".into(),
+            topic_id: "t1".into(),
+            timestamp: "2023-11-15T12:00:00.000Z".into(),
+            timestamp_ms: NOW,
+        };
+        let json = serde_json::to_string(&e).unwrap();
+        let e2: EventRow = serde_json::from_str(&json).unwrap();
+        assert_eq!(e, e2);
+    }
+}
+
+// ─── WASM integration tests ───────────────────────────────────────────────────
+//
+// Run with: wasm-pack test --headless --chrome
+// (requires wasm-pack + Chrome; tests run inside a real browser context)
+//
+// Tests exercise the IDB helpers and JS-dependent utilities end-to-end.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::{
+        add_event_idb, delete_event_idb, load_events_for_topic, load_topic_headers, open_db,
+        parse_import_line, save_topic_header, EventRow, TopicHeader,
+    };
+    use wasm_bindgen_test::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    fn test_header(id: &str, name: &str) -> TopicHeader {
+        TopicHeader {
+            id: id.into(),
+            name: name.into(),
+            count_total: 0,
+            count_today: 0,
+            count_week: 0,
+            count_month: 0,
+        }
+    }
+
+    fn test_event(id: &str, topic_id: &str, ts_ms: f64) -> EventRow {
+        EventRow {
+            id: id.into(),
+            topic_id: topic_id.into(),
+            timestamp: "2023-11-15T12:00:00.000Z".into(),
+            timestamp_ms: ts_ms,
+        }
+    }
+
+    // IDB: save a topic then load it back
+    #[wasm_bindgen_test]
+    async fn idb_save_and_load_topic() {
+        let db = open_db().await;
+        let hdr = test_header("topic-idb-1", "Running");
+        save_topic_header(&db, &hdr).await;
+        let loaded = load_topic_headers(&db).await;
+        assert!(loaded.iter().any(|h| h.id == "topic-idb-1" && h.name == "Running"));
+    }
+
+    // IDB: add an event then retrieve it by topic
+    #[wasm_bindgen_test]
+    async fn idb_add_and_load_events() {
+        let db = open_db().await;
+        let ev = test_event("ev-idb-1", "topic-idb-2", 1_700_046_000_000.0);
+        save_topic_header(&db, &test_header("topic-idb-2", "Cycling")).await;
+        add_event_idb(&db, &ev).await;
+        let events = load_events_for_topic(&db, "topic-idb-2").await;
+        assert!(events.iter().any(|e| e.id == "ev-idb-1"));
+    }
+
+    // IDB: delete an event
+    #[wasm_bindgen_test]
+    async fn idb_delete_event() {
+        let db = open_db().await;
+        let ev = test_event("ev-idb-del", "topic-idb-3", 1_700_046_000_000.0);
+        save_topic_header(&db, &test_header("topic-idb-3", "Swimming")).await;
+        add_event_idb(&db, &ev).await;
+        delete_event_idb(&db, "ev-idb-del").await;
+        let events = load_events_for_topic(&db, "topic-idb-3").await;
+        assert!(!events.iter().any(|e| e.id == "ev-idb-del"));
+    }
+
+    // parse_import_line: valid line parses successfully
+    #[wasm_bindgen_test]
+    fn parse_valid_import_line() {
+        let row = parse_import_line("2023-11-15 12:00:00.123000")
+            .expect("should parse a valid timestamp line");
+        assert!(row.timestamp_ms > 0.0);
+        assert!(!row.timestamp.is_empty());
+        assert_eq!(row.topic_id, ""); // caller fills this in
+    }
+
+    // parse_import_line: empty / blank lines return None
+    #[wasm_bindgen_test]
+    fn parse_empty_import_line_returns_none() {
+        assert!(parse_import_line("").is_none());
+        assert!(parse_import_line("   ").is_none());
+    }
+
+    // parse_import_line: malformed line returns None
+    #[wasm_bindgen_test]
+    fn parse_malformed_import_line_returns_none() {
+        assert!(parse_import_line("not-a-date").is_none());
+        assert!(parse_import_line("9999-99-99 99:99:99.000").is_none());
+    }
 }
