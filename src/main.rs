@@ -64,6 +64,16 @@ fn now_timestamp() -> String {
         .unwrap_or_default()
 }
 
+// Returns the current local date/time as "YYYY-MM-DDTHH:MM:SS" for datetime-local inputs.
+fn now_local_datetime_str() -> String {
+    let d = js_sys::Date::new_0();
+    format!(
+        "{}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        d.get_full_year(), d.get_month() + 1, d.get_date(),
+        d.get_hours(), d.get_minutes(), d.get_seconds(),
+    )
+}
+
 fn format_timestamp(iso: &str) -> String {
     let d = js_sys::Date::new(&JsValue::from_str(iso));
     format!(
@@ -236,6 +246,9 @@ fn TopicDetail() -> impl IntoView {
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id   = use_context::<RwSignal<String>>().expect("detail_id context");
 
+    let show_add_modal = RwSignal::new(false);
+    let manual_dt      = RwSignal::new(String::new());
+
     let go_back = move |_: leptos::ev::MouseEvent| { show_detail.set(false); };
 
     let topic_name = Memo::new(move |_| {
@@ -259,6 +272,28 @@ fn TopicDetail() -> impl IntoView {
                 export_topic(&t.name, &t.events);
             }
         });
+    };
+
+    let open_add_modal = move |_: leptos::ev::MouseEvent| {
+        manual_dt.set(now_local_datetime_str());
+        show_add_modal.set(true);
+    };
+
+    let close_add_modal = move |_: leptos::ev::MouseEvent| { show_add_modal.set(false); };
+
+    let add_manual_event = move |_: leptos::ev::MouseEvent| {
+        let dt_str = manual_dt.get();
+        let d = js_sys::Date::new(&JsValue::from_str(&dt_str));
+        if !d.get_time().is_nan() {
+            let iso = d.to_iso_string().as_string().unwrap_or_default();
+            let id = detail_id.get();
+            topics.update(|ts| {
+                if let Some(t) = ts.iter_mut().find(|t| t.id == id) {
+                    t.events.push(TrackedEvent { id: new_id(), timestamp: iso });
+                }
+            });
+        }
+        show_add_modal.set(false);
     };
 
     // Swipe-back gesture: start within 40 px of the left edge, drag right ≥ 50 px.
@@ -295,9 +330,14 @@ fn TopicDetail() -> impl IntoView {
                         "‹ Back"
                     </button>
                     <h1>{topic_name}</h1>
-                    <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">
-                        "↓"
-                    </button>
+                    <div class="header-right">
+                        <button class="header-btn header-btn-right" on:click=open_add_modal title="Log event manually">
+                            "+"
+                        </button>
+                        <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">
+                            "↓"
+                        </button>
+                    </div>
                 </div>
             </header>
             <main class="app-main app-main--detail">
@@ -337,6 +377,26 @@ fn TopicDetail() -> impl IntoView {
                     </ul>
                 </div>
             </main>
+
+            // ── Manual-event modal ─────────────────────────────────────────────
+            <Show when=move || show_add_modal.get()>
+                <div class="modal-backdrop" on:click=close_add_modal>
+                    <div class="modal-sheet" on:click=|ev: leptos::ev::MouseEvent| ev.stop_propagation()>
+                        <p class="modal-title">"Log event"</p>
+                        <input
+                            type="datetime-local"
+                            step="1"
+                            class="modal-datetime-input"
+                            prop:value=move || manual_dt.get()
+                            on:input=move |e| manual_dt.set(event_target_value(&e))
+                        />
+                        <div class="modal-actions">
+                            <button class="modal-btn modal-btn-cancel" on:click=close_add_modal>"Cancel"</button>
+                            <button class="modal-btn modal-btn-add" on:click=add_manual_event>"Add"</button>
+                        </div>
+                    </div>
+                </div>
+            </Show>
         </div>
     }
 }
