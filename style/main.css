@@ -27,7 +27,6 @@
 
 html, body {
   height: 100%;
-  overflow: hidden;          /* prevent the document itself from scrolling */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--color-bg);
   color: var(--color-text);
@@ -36,11 +35,16 @@ html, body {
 }
 
 /* ── App shell & navigation screens ──────────────────────────────────────── */
+/*
+ * position:fixed takes the app out of document flow entirely — there is
+ * nothing left to scroll at the document level, so iOS bounce never happens
+ * on the page. inset:0 + max-width + margin:auto centres it on wide screens.
+ */
 .app {
+  position: fixed;
+  inset: 0;
   max-width: 600px;
   margin: 0 auto;
-  height: 100dvh;
-  position: relative;
   overflow: hidden;
 }
 
