@@ -4,7 +4,7 @@ const CACHE_NAME = 'event-tracker-v1';
 self.addEventListener('install', function(event) {
   event.waitUntil(
     caches.open(CACHE_NAME).then(function(cache) {
-      return cache.addAll(['/', '/index.html', '/manifest.json']);
+      return cache.addAll(['/tools/', '/tools/manifest.json', '/tools/icon.svg']);
     })
   );
   self.skipWaiting();
@@ -60,7 +60,7 @@ self.addEventListener('fetch', function(event) {
         }).catch(function() {
           // Offline fallback for navigation
           if (event.request.mode === 'navigate') {
-            return caches.match('/');
+            return caches.match('/tools/');
           }
         });
       })
