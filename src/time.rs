@@ -94,6 +94,13 @@ pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
         topic_id: String::new(), // filled by caller
         timestamp: d.to_iso_string().as_string()?,
         timestamp_ms: ts_ms,
+        lat: None,
+        lon: None,
+        altitude: None,
+        heading: None,
+        speed: None,
+        accuracy: None,
+        altitude_accuracy: None,
     })
 }
 
@@ -164,6 +171,13 @@ mod tests {
             topic_id: "t".into(),
             timestamp: "".into(),
             timestamp_ms: ts_ms,
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
         }
     }
 
@@ -282,6 +296,13 @@ mod tests {
             topic_id: "t1".into(),
             timestamp: "2023-11-15T12:00:00.000Z".into(),
             timestamp_ms: NOW,
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
         };
         let json = serde_json::to_string(&e).unwrap();
         let e2: EventRow = serde_json::from_str(&json).unwrap();
@@ -422,6 +443,13 @@ mod wasm_tests {
             topic_id: "t1".into(),
             timestamp: "2023-11-15T12:00:00.000Z".into(),
             timestamp_ms: 1_700_046_000_000.0,
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
         };
         export_topic("smoke-test-2", &[ev]);
     }

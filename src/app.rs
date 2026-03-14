@@ -11,6 +11,54 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
+
+// ─── GPS snapshot ─────────────────────────────────────────────────────────────
+
+struct GpsSnapshot {
+    lat: f64,
+    lon: f64,
+    altitude: Option<f64>,
+    heading: Option<f64>,
+    speed: Option<f64>,
+    accuracy: f64,
+    altitude_accuracy: Option<f64>,
+}
+
+async fn get_gps() -> Option<GpsSnapshot> {
+    let window = web_sys::window()?;
+    let geo = window.navigator().geolocation().ok()?;
+    let promise = js_sys::Promise::new(&mut |resolve, reject| {
+        let options = web_sys::PositionOptions::new();
+        options.set_enable_high_accuracy(true);
+        options.set_timeout(10_000);
+        let on_success = Closure::once(move |pos: JsValue| {
+            let _ = resolve.call1(&JsValue::NULL, &pos);
+        });
+        let on_error = Closure::once(move |_: JsValue| {
+            let _ = reject.call0(&JsValue::NULL);
+        });
+        let _ = geo.get_current_position_with_error_callback_and_options(
+            on_success.as_ref().unchecked_ref(),
+            Some(on_error.as_ref().unchecked_ref()),
+            &options,
+        );
+        on_success.forget();
+        on_error.forget();
+    });
+    let pos_val = JsFuture::from(promise).await.ok()?;
+    // Extract via JS reflection — avoids depending on GeolocationPosition feature gating.
+    let coords = js_sys::Reflect::get(&pos_val, &JsValue::from_str("coords")).ok()?;
+    let get = |key: &str| js_sys::Reflect::get(&coords, &JsValue::from_str(key)).ok();
+    let lat      = get("latitude")?.as_f64()?;
+    let lon      = get("longitude")?.as_f64()?;
+    let accuracy = get("accuracy")?.as_f64()?;
+    let altitude          = get("altitude").and_then(|v| v.as_f64());
+    let altitude_accuracy = get("altitudeAccuracy").and_then(|v| v.as_f64());
+    let heading           = get("heading").and_then(|v| v.as_f64());
+    let speed             = get("speed").and_then(|v| v.as_f64());
+    Some(GpsSnapshot { lat, lon, altitude, heading, speed, accuracy, altitude_accuracy })
+}
 
 pub(crate) const PAGE_SIZE: usize = 50;
 
@@ -23,6 +71,8 @@ pub(crate) struct Editing(pub(crate) RwSignal<bool>);
 pub(crate) struct ShowDetail(pub(crate) RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct DbReady(pub(crate) RwSignal<bool>);
+#[derive(Clone, Copy)]
+pub(crate) struct ShowEventDetail(pub(crate) RwSignal<bool>);
 
 // Per-topic reactive signal list. Outer signal changes only on add/remove;
 // inner RwSignal<TopicHeader> changes only when that topic's counts change.
@@ -49,6 +99,13 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
             topic_id,
             timestamp: ts,
             timestamp_ms: ts_ms,
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
         };
         let row2 = row.clone();
         spawn_local(async move {
@@ -68,6 +125,20 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
                 }
             });
             save_topic_header(&db, &topic_signal.get_untracked()).await;
+            // Background: enrich with GPS once acquired
+            if let Some(gps) = get_gps().await {
+                let enriched = EventRow {
+                    lat: Some(gps.lat),
+                    lon: Some(gps.lon),
+                    altitude: gps.altitude,
+                    heading: gps.heading,
+                    speed: gps.speed,
+                    accuracy: Some(gps.accuracy),
+                    altitude_accuracy: gps.altitude_accuracy,
+                    ..row2
+                };
+                add_event_idb(&db, &enriched).await;
+            }
         });
     };
 
@@ -121,6 +192,8 @@ pub fn TopicDetail() -> impl IntoView {
     let topic_list = use_context::<TopicList>().expect("topic_list context");
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
+    let show_event_detail = use_context::<ShowEventDetail>().expect("show_event_detail context").0;
+    let event_detail_ev = use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
 
     let show_add_modal: RwSignal<bool> = RwSignal::new(false);
     let manual_dt: RwSignal<String> = RwSignal::new(String::new());
@@ -206,6 +279,13 @@ pub fn TopicDetail() -> impl IntoView {
                 topic_id,
                 timestamp: iso,
                 timestamp_ms: ts_ms,
+                lat: None,
+                lon: None,
+                altitude: None,
+                heading: None,
+                speed: None,
+                accuracy: None,
+                altitude_accuracy: None,
             };
             // Optimistic UI update
             events.update(|evs| evs.insert(0, row.clone()));
@@ -231,6 +311,20 @@ pub fn TopicDetail() -> impl IntoView {
                             }
                         });
                         save_topic_header(&db, &sig.get_untracked()).await;
+                    }
+                    // Background: enrich with GPS once acquired
+                    if let Some(gps) = get_gps().await {
+                        let enriched = EventRow {
+                            lat: Some(gps.lat),
+                            lon: Some(gps.lon),
+                            altitude: gps.altitude,
+                            heading: gps.heading,
+                            speed: gps.speed,
+                            accuracy: Some(gps.accuracy),
+                            altitude_accuracy: gps.altitude_accuracy,
+                            ..row2
+                        };
+                        add_event_idb(&db, &enriched).await;
                     }
                 });
             }
@@ -338,6 +432,17 @@ pub fn TopicDetail() -> impl IntoView {
                                     eid.with_value(|id| swiped_id.get().as_deref() == Some(id))
                                 };
 
+                                let open_event_detail = {
+                                    let ev_clone = ev.clone();
+                                    move |me: leptos::ev::MouseEvent| {
+                                        me.stop_propagation();
+                                        if !is_swiped() {
+                                            event_detail_ev.set(Some(ev_clone.clone()));
+                                            show_event_detail.set(true);
+                                        }
+                                    }
+                                };
+
                                 view! {
                                     <li
                                         class="event-item"
@@ -345,7 +450,7 @@ pub fn TopicDetail() -> impl IntoView {
                                         on:touchstart=on_touch_start_row
                                         on:touchend=on_touch_end_row
                                     >
-                                        <div class="event-item-content">
+                                        <div class="event-item-content" on:click=open_event_detail>
                                             <span class="event-icon">"🕐"</span>
                                             <span class="event-time">{format_timestamp(&ts_str)}</span>
                                         </div>
@@ -392,6 +497,115 @@ pub fn TopicDetail() -> impl IntoView {
 }
 
 #[component]
+pub fn EventDetail() -> impl IntoView {
+    let show_event_detail = use_context::<ShowEventDetail>().expect("show_event_detail context").0;
+    let event_detail_ev = use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
+
+    let go_back = move |_: leptos::ev::MouseEvent| {
+        show_event_detail.set(false);
+    };
+
+    // Swipe right from left edge to go back
+    let touch_start_x = StoredValue::new(0.0f64);
+    let touch_start_y = StoredValue::new(0.0f64);
+    let on_touch_start = move |ev: web_sys::TouchEvent| {
+        if let Some(t) = ev.touches().get(0) {
+            touch_start_x.set_value(t.client_x() as f64);
+            touch_start_y.set_value(t.client_y() as f64);
+        }
+    };
+    let on_touch_end = move |ev: web_sys::TouchEvent| {
+        if let Some(t) = ev.changed_touches().get(0) {
+            let sx = touch_start_x.get_value();
+            let dx = t.client_x() as f64 - sx;
+            let dy = (t.client_y() as f64 - touch_start_y.get_value()).abs();
+            if sx < 40.0 && dx > 50.0 && dx > dy {
+                show_event_detail.set(false);
+            }
+        }
+    };
+
+    let fmt_opt = |v: Option<f64>, unit: &'static str, decimals: usize| {
+        v.map(|n| format!("{:.prec$} {}", n, unit, prec = decimals))
+            .unwrap_or_else(|| "—".into())
+    };
+
+    let ev = move || event_detail_ev.get();
+
+    view! {
+        <div
+            class="event-detail-wrapper"
+            on:touchstart=on_touch_start
+            on:touchend=on_touch_end
+        >
+            <header class="app-header">
+                <div class="header-bar">
+                    <button class="header-btn header-btn-back" on:click=go_back>"‹ Back"</button>
+                    <h1>"Event"</h1>
+                    <div class="header-btn" style="min-width:64px"></div>
+                </div>
+            </header>
+            <div class="event-detail-main">
+                <Show when=move || ev().is_some()>
+                    {move || ev().map(|e| {
+                        let ts = format_timestamp(&e.timestamp);
+                        let lat_str  = e.lat.map(|v| format!("{:.6}°", v)).unwrap_or("—".into());
+                        let lon_str  = e.lon.map(|v| format!("{:.6}°", v)).unwrap_or("—".into());
+                        let alt_str  = fmt_opt(e.altitude, "m", 1);
+                        let hdg_str  = fmt_opt(e.heading, "°", 1);
+                        let spd_str  = e.speed.map(|v| format!("{:.1} m/s", v)).unwrap_or("—".into());
+                        let acc_str  = fmt_opt(e.accuracy, "m ±", 1);
+                        let aac_str  = fmt_opt(e.altitude_accuracy, "m ±", 1);
+                        view! {
+                            <div class="event-detail-card">
+                                <div class="event-detail-section">
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Time"</span>
+                                        <span class="event-detail-value">{ts}</span>
+                                    </div>
+                                </div>
+                                <div class="event-detail-section">
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Latitude"</span>
+                                        <span class="event-detail-value">{lat_str}</span>
+                                    </div>
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Longitude"</span>
+                                        <span class="event-detail-value">{lon_str}</span>
+                                    </div>
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Altitude"</span>
+                                        <span class="event-detail-value">{alt_str}</span>
+                                    </div>
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Accuracy"</span>
+                                        <span class="event-detail-value">{acc_str}</span>
+                                    </div>
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Alt. accuracy"</span>
+                                        <span class="event-detail-value">{aac_str}</span>
+                                    </div>
+                                </div>
+                                <div class="event-detail-section">
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Heading"</span>
+                                        <span class="event-detail-value">{hdg_str}</span>
+                                    </div>
+                                    <div class="event-detail-row">
+                                        <span class="event-detail-label">"Speed"</span>
+                                        <span class="event-detail-value">{spd_str}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    })}
+                </Show>
+            </div>
+        </div>
+    }
+}
+
+#[component]
 pub fn App() -> impl IntoView {
     let topic_list: TopicList = RwSignal::new(Vec::new());
     let db_ready_signal = RwSignal::new(false);
@@ -401,6 +615,8 @@ pub fn App() -> impl IntoView {
     let adding = RwSignal::new(false);
     let show_detail: RwSignal<bool> = RwSignal::new(false);
     let detail_id: RwSignal<String> = RwSignal::new(String::new());
+    let show_event_detail: RwSignal<bool> = RwSignal::new(false);
+    let event_detail_ev: RwSignal<Option<EventRow>> = RwSignal::new(None);
 
     spawn_local(async move {
         let db = open_db().await;
@@ -418,6 +634,8 @@ pub fn App() -> impl IntoView {
     provide_context(Editing(editing));
     provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
+    provide_context(ShowEventDetail(show_event_detail));
+    provide_context(event_detail_ev);
 
     let on_import = move |ev: leptos::ev::Event| {
         let input: web_sys::HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
@@ -609,8 +827,17 @@ pub fn App() -> impl IntoView {
             <div
                 class="screen screen-detail"
                 class:active=move || show_detail.get()
+                class:pushed=move || show_event_detail.get()
             >
                 <TopicDetail />
+            </div>
+
+            // ── Event detail screen ───────────────────────────────────────────
+            <div
+                class="screen screen-event-detail"
+                class:active=move || show_event_detail.get()
+            >
+                <EventDetail />
             </div>
         </div>
     }

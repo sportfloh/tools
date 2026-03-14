@@ -88,6 +88,7 @@ wasm-pack test --headless --chrome
 | `rexie` | 0.5 | IndexedDB async wrapper |
 | `serde` / `serde_json` | 1.0 | Serialisation |
 | `wasm-bindgen` / `js-sys` / `web-sys` | latest | WASM ↔ JS bridge |
+| `wasm-bindgen-futures` | 0.4 | Await JS Promises from async Rust (used for Geolocation) |
 
 Rust edition: **2024**.
 
@@ -113,7 +114,8 @@ Counts (today / week / month / total) are stored **denormalized** in `TopicHeade
 
 Leptos signals are the only state:
 - `TopicList` = `RwSignal<Vec<RwSignal<TopicHeader>>>` — outer signal changes on add/remove, inner signals change when counts change (avoids full list re-renders)
-- Three newtype-wrapped `RwSignal<bool>` passed via Leptos context: `Editing`, `ShowDetail`, `DbReady`
+- Four newtype-wrapped `RwSignal<bool>` passed via Leptos context: `Editing`, `ShowDetail`, `ShowEventDetail`, `DbReady`
+- `RwSignal<Option<EventRow>>` in context holds the event currently open in the event detail screen
 
 IDB calls always happen inside `spawn_local` (async on the WASM event loop).
 

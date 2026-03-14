@@ -23,6 +23,20 @@ pub struct EventRow {
     pub topic_id: String,
     pub timestamp: String,
     pub timestamp_ms: f64,
+    #[serde(default)]
+    pub lat: Option<f64>,
+    #[serde(default)]
+    pub lon: Option<f64>,
+    #[serde(default)]
+    pub altitude: Option<f64>,
+    #[serde(default)]
+    pub heading: Option<f64>,
+    #[serde(default)]
+    pub speed: Option<f64>,
+    #[serde(default)]
+    pub accuracy: Option<f64>,
+    #[serde(default)]
+    pub altitude_accuracy: Option<f64>,
 }
 
 // ─── Thread-local DB handle ───────────────────────────────────────────────────
@@ -216,6 +230,13 @@ mod wasm_tests {
             topic_id: topic_id.into(),
             timestamp: "2023-11-15T12:00:00.000Z".into(),
             timestamp_ms: ts_ms,
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
         }
     }
 
@@ -333,6 +354,13 @@ mod wasm_tests {
             topic_id: "topic-refresh-1".into(),
             timestamp: crate::time::now_timestamp(),
             timestamp_ms: js_sys::Date::now(),
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
         };
         add_event_idb(&db, &ev).await;
 
