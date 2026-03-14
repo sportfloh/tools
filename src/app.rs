@@ -1,6 +1,7 @@
 use crate::db::{
     DB, EventRow, TopicHeader, add_event_idb, delete_event_idb, delete_topic_idb, get_db,
-    load_events_for_topic, load_topic_headers, open_db, save_topic_header,
+    load_events_for_topic, load_topic_headers, open_db, refresh_topic_counts_idb,
+    save_topic_header,
 };
 use crate::time::{
     event_row_counts, export_topic, format_timestamp, new_id, now_local_datetime_str,
@@ -403,7 +404,10 @@ pub fn App() -> impl IntoView {
 
     spawn_local(async move {
         let db = open_db().await;
-        let headers = load_topic_headers(&db).await;
+        let mut headers = Vec::new();
+        for h in load_topic_headers(&db).await {
+            headers.push(refresh_topic_counts_idb(&db, &h).await);
+        }
         DB.with(|cell| *cell.borrow_mut() = Some(db));
         topic_list.set(headers.into_iter().map(RwSignal::new).collect());
         db_ready_signal.set(true);

@@ -36,7 +36,7 @@ cargo test --lib
 wasm-pack test --headless --chrome
 ```
 
-### Current coverage (8 native + 19 WASM tests)
+### Current coverage (9 native + 20 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -46,6 +46,7 @@ wasm-pack test --headless --chrome
 | `event_eight_days_ago_only_in_month` | native | `time.rs` | >7 days old skips week, still in month |
 | `event_before_month_start_only_in_total` | native | `time.rs` | event before month start only hits total |
 | `mixed_events_correct_counts` | native | `time.rs` | combination of all boundary cases |
+| `stale_boundaries_miscount_crossed_day` | native | `time.rs` | same event counted as today yesterday is NOT today with current bounds |
 | `topic_header_serde_round_trip` | native | `time.rs` | `TopicHeader` serialises and deserialises correctly |
 | `event_row_serde_round_trip` | native | `time.rs` | `EventRow` serialises and deserialises correctly |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
@@ -67,6 +68,7 @@ wasm-pack test --headless --chrome
 | `idb_delete_topic_cascades` | WASM | `db.rs` | deleting a topic removes its header and all its events |
 | `idb_save_topic_header_overwrites` | WASM | `db.rs` | saving same topic ID twice overwrites counts (upsert) |
 | `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
+| `idb_refresh_topic_counts` | WASM | `db.rs` | `refresh_topic_counts_idb` replaces stale counts with correct recomputed values |
 
 ## Source modules
 

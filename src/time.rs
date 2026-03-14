@@ -233,6 +233,34 @@ mod tests {
     }
 
     #[test]
+    fn stale_boundaries_miscount_crossed_day() {
+        // Event timestamped 1 hour before midnight yesterday.
+        let event_ts = TODAY_START - 3_600_000.0; // yesterday 23:00
+        let events = vec![ev(event_ts)];
+
+        // With current (today's) boundaries → NOT today, but still in the week window.
+        let (today, week, month, total) = event_row_counts(&events, bounds());
+        assert_eq!(today, 0, "event from yesterday must not count as today");
+        assert_eq!(week, 1, "but it is still within the 7-day window");
+        assert_eq!(month, 1);
+        assert_eq!(total, 1);
+
+        // With yesterday's boundaries (simulating stored stale counts) → WAS today.
+        let stale = (
+            TODAY_START - 1.0,                                       // "now"        = 23:59:59 yesterday
+            TODAY_START - 86_400_000.0,                              // "today_start" = day-before-yesterday midnight
+            TODAY_START,                                             // "today_end"   = yesterday midnight
+            MONTH_START,
+            TODAY_START - 86_400_000.0 - 7.0 * 86_400_000.0,       // "week_start"
+        );
+        let (today_stale, ..) = event_row_counts(&events, stale);
+        assert_eq!(
+            today_stale, 1,
+            "same event WAS counted as today under yesterday's stale boundaries"
+        );
+    }
+
+    #[test]
     fn topic_header_serde_round_trip() {
         let h = TopicHeader {
             id: "abc".into(),

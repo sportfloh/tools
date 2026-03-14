@@ -118,6 +118,21 @@ pub(crate) async fn load_events_for_topic(db: &Rexie, topic_id: &str) -> Vec<Eve
     rows
 }
 
+pub(crate) async fn refresh_topic_counts_idb(db: &Rexie, header: &TopicHeader) -> TopicHeader {
+    let events = load_events_for_topic(db, &header.id).await;
+    let (today, week, month, total) =
+        crate::time::event_row_counts(&events, crate::time::time_boundaries());
+    let updated = TopicHeader {
+        count_today: today,
+        count_week: week,
+        count_month: month,
+        count_total: total,
+        ..header.clone()
+    };
+    save_topic_header(db, &updated).await;
+    updated
+}
+
 pub(crate) async fn add_event_idb(db: &Rexie, row: &EventRow) {
     let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
         Ok(t) => t,
@@ -177,7 +192,8 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 mod wasm_tests {
     use super::{
         EventRow, TopicHeader, add_event_idb, delete_event_idb, delete_topic_idb,
-        load_events_for_topic, load_topic_headers, open_db, save_topic_header,
+        load_events_for_topic, load_topic_headers, open_db, refresh_topic_counts_idb,
+        save_topic_header,
     };
     use wasm_bindgen_test::*;
 
@@ -293,5 +309,48 @@ mod wasm_tests {
                 && events[1].timestamp_ms >= events[2].timestamp_ms,
             "events should be in descending order by timestamp_ms"
         );
+    }
+
+    // IDB: refresh_topic_counts_idb overwrites stale counts with recomputed values
+    #[wasm_bindgen_test]
+    async fn idb_refresh_topic_counts() {
+        let db = open_db().await;
+
+        // Save a topic with obviously wrong (stale) counts.
+        let stale = TopicHeader {
+            id: "topic-refresh-1".into(),
+            name: "Refresh test".into(),
+            count_total: 999,
+            count_today: 999,
+            count_week: 999,
+            count_month: 999,
+        };
+        save_topic_header(&db, &stale).await;
+
+        // Add exactly one event timestamped right now.
+        let ev = EventRow {
+            id: "ev-refresh-1".into(),
+            topic_id: "topic-refresh-1".into(),
+            timestamp: crate::time::now_timestamp(),
+            timestamp_ms: js_sys::Date::now(),
+        };
+        add_event_idb(&db, &ev).await;
+
+        // Refresh recomputes counts from actual events.
+        let refreshed = refresh_topic_counts_idb(&db, &stale).await;
+
+        assert_eq!(refreshed.count_total, 1, "total must be 1 after refresh");
+        assert_eq!(refreshed.count_today, 1, "today must be 1 after refresh");
+        assert_eq!(refreshed.count_week, 1, "week must be 1 after refresh");
+        assert_eq!(refreshed.count_month, 1, "month must be 1 after refresh");
+
+        // The persisted value must also be corrected.
+        let headers = load_topic_headers(&db).await;
+        let saved = headers
+            .iter()
+            .find(|h| h.id == "topic-refresh-1")
+            .expect("topic must still exist");
+        assert_eq!(saved.count_today, 1, "persisted count_today must be corrected");
+        assert_eq!(saved.count_total, 1, "persisted count_total must be corrected");
     }
 }
