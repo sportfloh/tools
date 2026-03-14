@@ -350,7 +350,13 @@ mod wasm_tests {
             .iter()
             .find(|h| h.id == "topic-refresh-1")
             .expect("topic must still exist");
-        assert_eq!(saved.count_today, 1, "persisted count_today must be corrected");
-        assert_eq!(saved.count_total, 1, "persisted count_total must be corrected");
+        assert_eq!(
+            saved.count_today, 1,
+            "persisted count_today must be corrected"
+        );
+        assert_eq!(
+            saved.count_total, 1,
+            "persisted count_total must be corrected"
+        );
     }
 }

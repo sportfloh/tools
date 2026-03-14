@@ -247,11 +247,11 @@ mod tests {
 
         // With yesterday's boundaries (simulating stored stale counts) → WAS today.
         let stale = (
-            TODAY_START - 1.0,                                       // "now"        = 23:59:59 yesterday
-            TODAY_START - 86_400_000.0,                              // "today_start" = day-before-yesterday midnight
-            TODAY_START,                                             // "today_end"   = yesterday midnight
+            TODAY_START - 1.0,          // "now"        = 23:59:59 yesterday
+            TODAY_START - 86_400_000.0, // "today_start" = day-before-yesterday midnight
+            TODAY_START,                // "today_end"   = yesterday midnight
             MONTH_START,
-            TODAY_START - 86_400_000.0 - 7.0 * 86_400_000.0,       // "week_start"
+            TODAY_START - 86_400_000.0 - 7.0 * 86_400_000.0, // "week_start"
         );
         let (today_stale, ..) = event_row_counts(&events, stale);
         assert_eq!(
