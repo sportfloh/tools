@@ -52,6 +52,22 @@ jobs:
       - name: Build
         run: trunk build --release --public-url /tools/
 
+      - name: Verify PWA dist structure
+        run: |
+          # SW and icon must be at dist/ root (not dist/public/) for the
+          # service worker to register at ./service-worker.js and for the
+          # manifest icon path to resolve correctly.
+          fail=0
+          for f in service-worker.js icon.svg; do
+            if [ ! -f "dist/$f" ]; then
+              echo "FAIL: dist/$f is missing"; fail=1
+            fi
+            if [ -f "dist/public/$f" ]; then
+              echo "FAIL: dist/public/$f exists — file is at the wrong path"; fail=1
+            fi
+          done
+          exit $fail
+
       - name: Create Pages artifact
         run: |
           tar --dereference --hard-dereference \
