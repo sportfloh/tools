@@ -50,14 +50,22 @@ async fn get_gps() -> Option<GpsSnapshot> {
     // Extract via JS reflection — avoids depending on GeolocationPosition feature gating.
     let coords = js_sys::Reflect::get(&pos_val, &JsValue::from_str("coords")).ok()?;
     let get = |key: &str| js_sys::Reflect::get(&coords, &JsValue::from_str(key)).ok();
-    let lat      = get("latitude")?.as_f64()?;
-    let lon      = get("longitude")?.as_f64()?;
+    let lat = get("latitude")?.as_f64()?;
+    let lon = get("longitude")?.as_f64()?;
     let accuracy = get("accuracy")?.as_f64()?;
-    let altitude          = get("altitude").and_then(|v| v.as_f64());
+    let altitude = get("altitude").and_then(|v| v.as_f64());
     let altitude_accuracy = get("altitudeAccuracy").and_then(|v| v.as_f64());
-    let heading           = get("heading").and_then(|v| v.as_f64());
-    let speed             = get("speed").and_then(|v| v.as_f64());
-    Some(GpsSnapshot { lat, lon, altitude, heading, speed, accuracy, altitude_accuracy })
+    let heading = get("heading").and_then(|v| v.as_f64());
+    let speed = get("speed").and_then(|v| v.as_f64());
+    Some(GpsSnapshot {
+        lat,
+        lon,
+        altitude,
+        heading,
+        speed,
+        accuracy,
+        altitude_accuracy,
+    })
 }
 
 pub(crate) const PAGE_SIZE: usize = 50;
@@ -192,8 +200,11 @@ pub fn TopicDetail() -> impl IntoView {
     let topic_list = use_context::<TopicList>().expect("topic_list context");
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
-    let show_event_detail = use_context::<ShowEventDetail>().expect("show_event_detail context").0;
-    let event_detail_ev = use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
+    let show_event_detail = use_context::<ShowEventDetail>()
+        .expect("show_event_detail context")
+        .0;
+    let event_detail_ev =
+        use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
 
     let show_add_modal: RwSignal<bool> = RwSignal::new(false);
     let manual_dt: RwSignal<String> = RwSignal::new(String::new());
@@ -498,8 +509,11 @@ pub fn TopicDetail() -> impl IntoView {
 
 #[component]
 pub fn EventDetail() -> impl IntoView {
-    let show_event_detail = use_context::<ShowEventDetail>().expect("show_event_detail context").0;
-    let event_detail_ev = use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
+    let show_event_detail = use_context::<ShowEventDetail>()
+        .expect("show_event_detail context")
+        .0;
+    let event_detail_ev =
+        use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
 
     let go_back = move |_: leptos::ev::MouseEvent| {
         show_event_detail.set(false);
