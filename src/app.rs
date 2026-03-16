@@ -620,6 +620,22 @@ pub fn EventDetail() -> impl IntoView {
     }
 }
 
+// ─── URL action helper ────────────────────────────────────────────────────────
+
+/// Extract the raw (URL-encoded) value of the `add` query parameter.
+/// Returns `None` if the parameter is absent.
+/// Caller is responsible for decoding percent-encoding (e.g. via
+/// `js_sys::decode_uri_component`) before using the value.
+fn parse_add_param_raw(search: &str) -> Option<&str> {
+    let s = search.strip_prefix('?').unwrap_or(search);
+    for pair in s.split('&') {
+        if let Some(val) = pair.strip_prefix("add=") {
+            return Some(val);
+        }
+    }
+    None
+}
+
 // ─── Foreground refresh helper ────────────────────────────────────────────────
 
 /// Recompute and persist every topic's counts from its stored events,
@@ -647,12 +663,54 @@ pub fn App() -> impl IntoView {
     let show_event_detail: RwSignal<bool> = RwSignal::new(false);
     let event_detail_ev: RwSignal<Option<EventRow>> = RwSignal::new(None);
 
+    // Read ?add=<topic-name> synchronously before entering the async block.
+    let pending_add: Option<String> = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .as_deref()
+        .and_then(parse_add_param_raw)
+        .and_then(|raw| {
+            js_sys::decode_uri_component(raw)
+                .ok()
+                .and_then(|v| v.as_string())
+                .filter(|s| !s.is_empty())
+        });
+
     spawn_local(async move {
         let db = open_db().await;
-        let mut headers = Vec::new();
-        for h in load_topic_headers(&db).await {
-            headers.push(refresh_topic_counts_idb(&db, &h).await);
+        let headers_raw = load_topic_headers(&db).await;
+        let mut headers: Vec<TopicHeader> = Vec::new();
+        for h in &headers_raw {
+            headers.push(refresh_topic_counts_idb(&db, h).await);
         }
+
+        // ── Handle ?add=<topic-name> ─────────────────────────────────────────
+        if let Some(ref name) = pending_add {
+            if let Some(header) = headers.iter_mut().find(|h| &h.name == name) {
+                let row = EventRow {
+                    id: new_id(),
+                    topic_id: header.id.clone(),
+                    timestamp: now_timestamp(),
+                    timestamp_ms: js_sys::Date::now(),
+                    lat: None,
+                    lon: None,
+                    altitude: None,
+                    heading: None,
+                    speed: None,
+                    accuracy: None,
+                    altitude_accuracy: None,
+                };
+                add_event_idb(&db, &row).await;
+                *header = refresh_topic_counts_idb(&db, header).await;
+            }
+            // Remove param so a reload does not re-fire the action.
+            if let Some(w) = web_sys::window()
+                && let Ok(hist) = w.history()
+            {
+                let path = w.location().pathname().unwrap_or_else(|_| "/".into());
+                let _ = hist.replace_state_with_url(&JsValue::NULL, "", Some(&path));
+            }
+        }
+
         DB.with(|cell| *cell.borrow_mut() = Some(db));
         topic_list.set(headers.into_iter().map(RwSignal::new).collect());
         db_ready_signal.set(true);
@@ -1061,5 +1119,22 @@ mod tests {
         let h = sig.get_untracked();
         assert_eq!(h.count_total, 1, "total should be 1 after refresh");
         assert_ne!(h.count_today, 99, "today should not be stale 99");
+    }
+
+    #[test]
+    fn parse_add_param_raw_present() {
+        assert_eq!(parse_add_param_raw("?add=Running"), Some("Running"));
+        assert_eq!(parse_add_param_raw("?foo=bar&add=Cycling"), Some("Cycling"));
+        assert_eq!(
+            parse_add_param_raw("?add=Morning%20Run"),
+            Some("Morning%20Run")
+        );
+    }
+
+    #[test]
+    fn parse_add_param_raw_absent() {
+        assert_eq!(parse_add_param_raw(""), None);
+        assert_eq!(parse_add_param_raw("?foo=bar"), None);
+        assert_eq!(parse_add_param_raw("?adding=foo"), None); // prefix must be exact key
     }
 }

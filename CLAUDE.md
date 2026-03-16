@@ -36,7 +36,7 @@ cargo test --lib
 wasm-pack test --headless --chrome
 ```
 
-### Current coverage (12 native + 21 WASM tests)
+### Current coverage (14 native + 21 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -52,6 +52,8 @@ wasm-pack test --headless --chrome
 | `bulk_export_serde_round_trip` | native | `time.rs` | `BulkExport` + `TopicExport` round-trip through JSON |
 | `parse_bulk_import_valid` | native | `time.rs` | valid JSON deserialises to `BulkExport` with correct fields |
 | `parse_bulk_import_invalid_returns_none` | native | `time.rs` | malformed JSON and missing fields return `None` |
+| `parse_add_param_raw_present` | native | `app.rs` | `?add=` param is extracted correctly, including encoded values |
+| `parse_add_param_raw_absent` | native | `app.rs` | missing / non-matching params return `None` |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
@@ -159,6 +161,19 @@ A `visibilitychange` listener is registered on `document` inside `App()`. When t
 **Per-topic (plain-text):** one timestamp per line: `YYYY-MM-DD HH:MM:SS.mmm000`. Import parses via `js_sys::Date`; export triggers a browser download via a `Blob` URL. Accessible via the `↑` / export button inside the topic detail screen.
 
 **Bulk (JSON):** a single `trackit-YYYY-MM-DD.json` file containing all topics and all their events. Structure: `{ version: 1, topics: [{ id, name, events: [...EventRow] }] }`. Counts are excluded (recomputed on import). Accessible via the `⬇` (export) and `⬆` (import) buttons in the main header. Import is additive and deduplicates events by `timestamp` string, matching the per-topic import behaviour.
+
+### URL actions (Apple Shortcuts / deep links)
+
+The app reads the `?add=<topic-name>` query parameter **once on startup** (synchronously, before entering the async IDB block). If the named topic exists, a timestamped event (no GPS) is added to it; then `history.replaceState` strips the param so a page reload does not re-fire the action.
+
+Use with Apple Shortcuts via the **"Open URLs"** action:
+```
+https://<host>/tools/?add=Running
+https://<host>/tools/?add=Morning%20Run   ← spaces as %20
+```
+On iOS 16.4+ the PWA opens as a standalone app; the event is recorded immediately and the updated count is visible in the topic list. On older iOS versions the URL opens in Safari instead.
+
+The parsing helper `parse_add_param_raw` is pure Rust (no WASM APIs) and is covered by native unit tests.
 
 ### PWA
 
