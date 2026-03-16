@@ -36,7 +36,7 @@ cargo test --lib
 wasm-pack test --headless --chrome
 ```
 
-### Current coverage (9 native + 20 WASM tests)
+### Current coverage (9 native + 21 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -69,6 +69,7 @@ wasm-pack test --headless --chrome
 | `idb_save_topic_header_overwrites` | WASM | `db.rs` | saving same topic ID twice overwrites counts (upsert) |
 | `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
 | `idb_refresh_topic_counts` | WASM | `db.rs` | `refresh_topic_counts_idb` replaces stale counts with correct recomputed values |
+| `refresh_all_counts_corrects_stale_signal` | WASM | `app.rs` | `refresh_all_topic_counts` updates stale Leptos signals to match recomputed IDB counts |
 
 ## TDD Workflow
 
@@ -147,6 +148,8 @@ Leptos signals are the only state:
 - `RwSignal<Option<EventRow>>` in context holds the event currently open in the event detail screen
 
 IDB calls always happen inside `spawn_local` (async on the WASM event loop).
+
+A `visibilitychange` listener is registered on `document` inside `App()`. When the page returns to the foreground (`!document.hidden`) and the `today_start` boundary has changed (i.e. midnight passed while the app was backgrounded), `refresh_all_topic_counts` is called to recompute and update every topic's counts from IDB. The `Closure` is intentionally leaked (`.forget()`) because the `App` component lives for the entire page lifetime.
 
 ### Import / export format
 

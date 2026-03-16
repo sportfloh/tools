@@ -3,6 +3,7 @@ use crate::db::{
     load_events_for_topic, load_topic_headers, open_db, refresh_topic_counts_idb,
     save_topic_header,
 };
+use rexie::Rexie;
 use crate::time::{
     event_row_counts, export_topic, format_timestamp, new_id, now_local_datetime_str,
     now_timestamp, parse_import_line, time_boundaries,
@@ -619,6 +620,20 @@ pub fn EventDetail() -> impl IntoView {
     }
 }
 
+// ─── Foreground refresh helper ────────────────────────────────────────────────
+
+/// Recompute and persist every topic's counts from its stored events,
+/// then update the corresponding Leptos signals.
+/// Called on startup and whenever the page returns to the foreground after a
+/// potential day rollover.
+pub(crate) async fn refresh_all_topic_counts(db: &Rexie, topic_list: TopicList) {
+    for sig in topic_list.get_untracked() {
+        let h = sig.get_untracked();
+        let fresh = refresh_topic_counts_idb(db, &h).await;
+        sig.set(fresh);
+    }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let topic_list: TopicList = RwSignal::new(Vec::new());
@@ -650,6 +665,38 @@ pub fn App() -> impl IntoView {
     provide_context(detail_id);
     provide_context(ShowEventDetail(show_event_detail));
     provide_context(event_detail_ev);
+
+    // ── Foreground detection: refresh counts when a new day has started ───────
+    {
+        let last_today_start = StoredValue::new(time_boundaries().1);
+        let doc = web_sys::window().unwrap().document().unwrap();
+        let doc2 = doc.clone(); // moved into the closure
+
+        let listener = Closure::<dyn Fn()>::new(move || {
+            if doc2.hidden() {
+                return; // fired while going to background — nothing to do
+            }
+            let new_ts = time_boundaries().1;
+            if new_ts == last_today_start.get_value() {
+                return; // same day, counts are still valid
+            }
+            last_today_start.set_value(new_ts);
+            spawn_local(async move {
+                let Some(db) = get_db() else { return };
+                refresh_all_topic_counts(&db, topic_list).await;
+            });
+        });
+
+        doc.add_event_listener_with_callback(
+            "visibilitychange",
+            listener.as_ref().unchecked_ref(),
+        )
+        .unwrap();
+        // The App component lives for the entire page lifetime, so the
+        // listener should too. Leaking avoids the Send + Sync requirement
+        // that on_cleanup imposes on its closure.
+        listener.forget();
+    }
 
     let on_import = move |ev: leptos::ev::Event| {
         let input: web_sys::HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
@@ -854,5 +901,56 @@ pub fn App() -> impl IntoView {
                 <EventDetail />
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{add_event_idb, open_db, save_topic_header};
+    use crate::time::{new_id, now_timestamp};
+    use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    /// Calling `refresh_all_topic_counts` must replace stale denormalized
+    /// counts with the values recomputed from the stored events.
+    #[wasm_bindgen_test]
+    async fn refresh_all_counts_corrects_stale_signal() {
+        let db = open_db().await;
+
+        let topic_id = new_id();
+        let header = TopicHeader {
+            id: topic_id.clone(),
+            name: "stale-test".into(),
+            count_today: 99,
+            count_week: 99,
+            count_month: 99,
+            count_total: 99,
+        };
+        save_topic_header(&db, &header).await;
+
+        let row = EventRow {
+            id: new_id(),
+            topic_id: topic_id.clone(),
+            timestamp: now_timestamp(),
+            timestamp_ms: js_sys::Date::now(),
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
+        };
+        add_event_idb(&db, &row).await;
+
+        let sig: RwSignal<TopicHeader> = RwSignal::new(header);
+        let topic_list: TopicList = RwSignal::new(vec![sig]);
+
+        refresh_all_topic_counts(&db, topic_list).await;
+
+        let h = sig.get_untracked();
+        assert_eq!(h.count_total, 1, "total should be 1 after refresh");
+        assert_ne!(h.count_today, 99, "today should not be stale 99");
     }
 }
