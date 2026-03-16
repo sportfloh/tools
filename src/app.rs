@@ -3,13 +3,13 @@ use crate::db::{
     load_events_for_topic, load_topic_headers, open_db, refresh_topic_counts_idb,
     save_topic_header,
 };
-use rexie::Rexie;
 use crate::time::{
     event_row_counts, export_topic, format_timestamp, new_id, now_local_datetime_str,
     now_timestamp, parse_import_line, time_boundaries,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use rexie::Rexie;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
@@ -687,11 +687,8 @@ pub fn App() -> impl IntoView {
             });
         });
 
-        doc.add_event_listener_with_callback(
-            "visibilitychange",
-            listener.as_ref().unchecked_ref(),
-        )
-        .unwrap();
+        doc.add_event_listener_with_callback("visibilitychange", listener.as_ref().unchecked_ref())
+            .unwrap();
         // The App component lives for the entire page lifetime, so the
         // listener should too. Leaking avoids the Send + Sync requirement
         // that on_cleanup imposes on its closure.
