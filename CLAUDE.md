@@ -70,6 +70,35 @@ wasm-pack test --headless --chrome
 | `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
 | `idb_refresh_topic_counts` | WASM | `db.rs` | `refresh_topic_counts_idb` replaces stale counts with correct recomputed values |
 
+## TDD Workflow
+
+Every new feature **must** follow the red → green → refactor cycle:
+
+1. **Red** — Write a failing test that names the desired behaviour. Commit it
+   alone (or together with a stub that makes it compile but still fail at
+   runtime). Run the suite and confirm the new test fails and only the new
+   test fails:
+   ```sh
+   cargo test --lib                    # native tests
+   wasm-pack test --headless --chrome  # WASM tests
+   ```
+
+2. **Green** — Write the *minimum* production code to make the failing test
+   pass. Do not polish or generalise yet. Confirm the full suite is still
+   green.
+
+3. **Refactor** — Clean up both production code and the test while keeping the
+   suite green.
+
+### Choosing the right test kind
+
+| Logic touches… | Use |
+|---|---|
+| Pure Rust (no JS APIs, no `web-sys`) | `#[test]` in the relevant module (`time.rs`, etc.) — runs with `cargo test --lib` |
+| JS APIs / `web-sys` / IndexedDB | `#[wasm_bindgen_test]` in the relevant module — runs with `wasm-pack test` |
+
+Prefer native tests wherever possible; they are faster and need no browser.
+
 ## Source modules
 
 | File | Purpose |
@@ -139,5 +168,6 @@ After every major change, update this file to reflect the current state. Specifi
 - **Build / tooling change** — update the Commands section and dependency versions
 - **Tests added or removed** — update the Tests section (count, how to run, what is covered)
 - **Gotchas discovered** — add a "Gotchas & Pitfalls" section if one does not exist
+- **New feature** — write the failing test first (red), then implement (green), then update the coverage table in the Tests section
 
 Keep this file as the single source of truth for AI sessions working on this project.
