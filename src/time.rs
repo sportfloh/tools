@@ -1,4 +1,5 @@
-use crate::db::EventRow;
+use crate::db::{EventRow, TopicHeader};
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
 use web_sys::window;
 
@@ -140,6 +141,61 @@ pub(crate) fn export_topic(name: &str, events: &[EventRow]) {
     web_sys::Url::revoke_object_url(&url).unwrap();
 }
 
+// ─── Bulk export / import ────────────────────────────────────────────────────
+
+/// One topic together with all of its events, used in the JSON backup format.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct TopicExport {
+    pub id: String,
+    pub name: String,
+    pub events: Vec<EventRow>,
+}
+
+/// Top-level JSON backup document.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct BulkExport {
+    pub version: u32,
+    pub topics: Vec<TopicExport>,
+}
+
+/// Serialize all topics+events to JSON and trigger a browser download.
+pub(crate) fn export_all(topics: &[(TopicHeader, Vec<EventRow>)]) {
+    let export = BulkExport {
+        version: 1,
+        topics: topics
+            .iter()
+            .map(|(h, evs)| TopicExport {
+                id: h.id.clone(),
+                name: h.name.clone(),
+                events: evs.clone(),
+            })
+            .collect(),
+    };
+    let json = match serde_json::to_string(&export) {
+        Ok(j) => j,
+        Err(_) => return,
+    };
+    let now = now_local_datetime_str();
+    let date = &now[..10]; // YYYY-MM-DD
+    let arr = js_sys::Array::new();
+    arr.push(&JsValue::from_str(&json));
+    let blob = web_sys::Blob::new_with_str_sequence(&arr).unwrap();
+    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+    let doc = window().unwrap().document().unwrap();
+    let a: web_sys::HtmlAnchorElement = doc.create_element("a").unwrap().dyn_into().unwrap();
+    a.set_href(&url);
+    a.set_download(&format!("trackit-{}.json", date));
+    doc.body().unwrap().append_child(&a).unwrap();
+    a.click();
+    doc.body().unwrap().remove_child(&a).unwrap();
+    web_sys::Url::revoke_object_url(&url).unwrap();
+}
+
+/// Deserialize a bulk-export JSON string; returns `None` on any parse error.
+pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
+    serde_json::from_str(json).ok()
+}
+
 // ─── Unit tests ───────────────────────────────────────────────────────────────
 //
 // Run with: cargo test  (native target — no WASM toolchain needed)
@@ -150,6 +206,7 @@ pub(crate) fn export_topic(name: &str, events: &[EventRow]) {
 mod tests {
     use super::event_row_counts;
     use crate::db::{EventRow, TopicHeader};
+    use super::{BulkExport, TopicExport, parse_bulk_import};
 
     // 2023-11-15 12:00:00 UTC  →  1_700_046_000_000 ms since epoch
     const NOW: f64 = 1_700_046_000_000.0;
@@ -287,6 +344,53 @@ mod tests {
         let json = serde_json::to_string(&h).unwrap();
         let h2: TopicHeader = serde_json::from_str(&json).unwrap();
         assert_eq!(h, h2);
+    }
+
+    #[test]
+    fn bulk_export_serde_round_trip() {
+        let ev = EventRow {
+            id: "e1".into(),
+            topic_id: "t1".into(),
+            timestamp: "2023-11-15T12:00:00.000Z".into(),
+            timestamp_ms: NOW,
+            lat: None,
+            lon: None,
+            altitude: None,
+            heading: None,
+            speed: None,
+            accuracy: None,
+            altitude_accuracy: None,
+        };
+        let export = BulkExport {
+            version: 1,
+            topics: vec![TopicExport {
+                id: "t1".into(),
+                name: "Running".into(),
+                events: vec![ev],
+            }],
+        };
+        let json = serde_json::to_string(&export).unwrap();
+        let back: BulkExport = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.version, 1);
+        assert_eq!(back.topics.len(), 1);
+        assert_eq!(back.topics[0].name, "Running");
+        assert_eq!(back.topics[0].events.len(), 1);
+        assert_eq!(back.topics[0].events[0].id, "e1");
+    }
+
+    #[test]
+    fn parse_bulk_import_valid() {
+        let json = r#"{"version":1,"topics":[{"id":"t1","name":"Running","events":[]}]}"#;
+        let result = parse_bulk_import(json);
+        assert!(result.is_some());
+        let bulk = result.unwrap();
+        assert_eq!(bulk.topics[0].name, "Running");
+    }
+
+    #[test]
+    fn parse_bulk_import_invalid_returns_none() {
+        assert!(parse_bulk_import("not json").is_none());
+        assert!(parse_bulk_import("{}").is_none()); // missing required fields
     }
 
     #[test]

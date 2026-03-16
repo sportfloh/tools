@@ -4,8 +4,8 @@ use crate::db::{
     save_topic_header,
 };
 use crate::time::{
-    event_row_counts, export_topic, format_timestamp, new_id, now_local_datetime_str,
-    now_timestamp, parse_import_line, time_boundaries,
+    event_row_counts, export_all, export_topic, format_timestamp, new_id, now_local_datetime_str,
+    now_timestamp, parse_bulk_import, parse_import_line, time_boundaries,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -785,6 +785,107 @@ pub fn App() -> impl IntoView {
         input.set_value("");
     };
 
+    // ── Bulk JSON export ──────────────────────────────────────────────────────
+    let on_export_all = move |_: leptos::ev::MouseEvent| {
+        spawn_local(async move {
+            let Some(db) = get_db() else { return };
+            let headers = load_topic_headers(&db).await;
+            let mut topic_events: Vec<(TopicHeader, Vec<EventRow>)> = Vec::new();
+            for h in headers {
+                let events = load_events_for_topic(&db, &h.id).await;
+                topic_events.push((h, events));
+            }
+            export_all(&topic_events);
+        });
+    };
+
+    // ── Bulk JSON import ──────────────────────────────────────────────────────
+    let on_import_json = move |ev: leptos::ev::Event| {
+        let input: web_sys::HtmlInputElement = ev.target().unwrap().dyn_into().unwrap();
+        let files = input.files().unwrap();
+        if files.length() == 0 {
+            return;
+        }
+        let file = files.get(0).unwrap();
+        let reader = web_sys::FileReader::new().unwrap();
+        let reader_clone = reader.clone();
+
+        let on_load = Closure::once(move |_: JsValue| {
+            let text = reader_clone.result().unwrap().as_string().unwrap();
+            let Some(bulk) = parse_bulk_import(&text) else {
+                return;
+            };
+            let Some(db) = get_db() else { return };
+
+            spawn_local(async move {
+                for topic_export in bulk.topics {
+                    let existing_sig = topic_list.with_untracked(|rows| {
+                        rows.iter()
+                            .find(|s| s.with_untracked(|h| h.name == topic_export.name))
+                            .copied()
+                    });
+
+                    if let Some(sig) = existing_sig {
+                        // Merge events into existing topic
+                        let topic_id = sig.with_untracked(|h| h.id.clone());
+                        let existing = load_events_for_topic(&db, &topic_id).await;
+                        let existing_ts: std::collections::HashSet<String> =
+                            existing.iter().map(|e| e.timestamp.clone()).collect();
+                        let mut all = existing;
+                        for mut row in topic_export.events {
+                            if !existing_ts.contains(&row.timestamp) {
+                                row.id = new_id(); // fresh ID to avoid collision
+                                row.topic_id = topic_id.clone();
+                                add_event_idb(&db, &row).await;
+                                all.push(row);
+                            }
+                        }
+                        let counts = event_row_counts(&all, time_boundaries());
+                        sig.update(|h| {
+                            h.count_total = counts.3;
+                            h.count_today = counts.0;
+                            h.count_week = counts.1;
+                            h.count_month = counts.2;
+                        });
+                        save_topic_header(&db, &sig.get_untracked()).await;
+                    } else {
+                        // Create new topic
+                        let topic_id = new_id();
+                        let rows_with_topic: Vec<EventRow> = topic_export
+                            .events
+                            .into_iter()
+                            .map(|mut r| {
+                                r.id = new_id();
+                                r.topic_id = topic_id.clone();
+                                r
+                            })
+                            .collect();
+                        let counts = event_row_counts(&rows_with_topic, time_boundaries());
+                        let header = TopicHeader {
+                            id: topic_id,
+                            name: topic_export.name,
+                            count_total: counts.3,
+                            count_today: counts.0,
+                            count_week: counts.1,
+                            count_month: counts.2,
+                        };
+                        save_topic_header(&db, &header).await;
+                        for row in &rows_with_topic {
+                            add_event_idb(&db, row).await;
+                        }
+                        let header_sig = RwSignal::new(header);
+                        topic_list.update(|rows| rows.push(header_sig));
+                    }
+                }
+            });
+        });
+
+        reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
+        on_load.forget();
+        reader.read_as_text(&file).unwrap();
+        input.set_value("");
+    };
+
     let add_topic = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
         let name = new_name.get().trim().to_string();
@@ -832,7 +933,18 @@ pub fn App() -> impl IntoView {
                         </Show>
                         <h1>"trackit"</h1>
                         <div class="header-right">
-                            <label class="header-btn header-btn-import" title="Import from .txt">
+                            <button
+                                class="header-btn"
+                                title="Export all topics (JSON)"
+                                on:click=on_export_all
+                            >
+                                "⬇"
+                            </button>
+                            <label class="header-btn header-btn-import" title="Import all topics (JSON)">
+                                "⬆"
+                                <input type="file" accept=".json" style="display:none" on:change=on_import_json />
+                            </label>
+                            <label class="header-btn header-btn-import" title="Import topic from .txt">
                                 "↑"
                                 <input type="file" accept=".txt" style="display:none" on:change=on_import />
                             </label>

@@ -36,7 +36,7 @@ cargo test --lib
 wasm-pack test --headless --chrome
 ```
 
-### Current coverage (9 native + 21 WASM tests)
+### Current coverage (12 native + 21 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -49,6 +49,9 @@ wasm-pack test --headless --chrome
 | `stale_boundaries_miscount_crossed_day` | native | `time.rs` | same event counted as today yesterday is NOT today with current bounds |
 | `topic_header_serde_round_trip` | native | `time.rs` | `TopicHeader` serialises and deserialises correctly |
 | `event_row_serde_round_trip` | native | `time.rs` | `EventRow` serialises and deserialises correctly |
+| `bulk_export_serde_round_trip` | native | `time.rs` | `BulkExport` + `TopicExport` round-trip through JSON |
+| `parse_bulk_import_valid` | native | `time.rs` | valid JSON deserialises to `BulkExport` with correct fields |
+| `parse_bulk_import_invalid_returns_none` | native | `time.rs` | malformed JSON and missing fields return `None` |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
@@ -153,7 +156,9 @@ A `visibilitychange` listener is registered on `document` inside `App()`. When t
 
 ### Import / export format
 
-Plain-text, one timestamp per line: `YYYY-MM-DD HH:MM:SS.mmm000`. Import parses via `js_sys::Date`; export triggers a browser download via a `Blob` URL.
+**Per-topic (plain-text):** one timestamp per line: `YYYY-MM-DD HH:MM:SS.mmm000`. Import parses via `js_sys::Date`; export triggers a browser download via a `Blob` URL. Accessible via the `↑` / export button inside the topic detail screen.
+
+**Bulk (JSON):** a single `trackit-YYYY-MM-DD.json` file containing all topics and all their events. Structure: `{ version: 1, topics: [{ id, name, events: [...EventRow] }] }`. Counts are excluded (recomputed on import). Accessible via the `⬇` (export) and `⬆` (import) buttons in the main header. Import is additive and deduplicates events by `timestamp` string, matching the per-topic import behaviour.
 
 ### PWA
 
