@@ -205,8 +205,8 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 #[cfg(test)]
 mod tests {
     use super::event_row_counts;
-    use crate::db::{EventRow, TopicHeader};
     use super::{BulkExport, TopicExport, parse_bulk_import};
+    use crate::db::{EventRow, TopicHeader};
 
     // 2023-11-15 12:00:00 UTC  →  1_700_046_000_000 ms since epoch
     const NOW: f64 = 1_700_046_000_000.0;
