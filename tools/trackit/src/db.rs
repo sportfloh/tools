@@ -76,10 +76,7 @@ pub(crate) async fn load_topic_headers(db: &Rexie) -> Vec<TopicHeader> {
         Ok(s) => s,
         Err(_) => return Vec::new(),
     };
-    let records = store
-        .get_all(None, None)
-        .await
-        .unwrap_or_default();
+    let records = store.get_all(None, None).await.unwrap_or_default();
     tx.done().await.ok();
     records
         .into_iter()
@@ -116,10 +113,7 @@ pub(crate) async fn load_events_for_topic(db: &Rexie, topic_id: &str) -> Vec<Eve
         Err(_) => return Vec::new(),
     };
     let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
-    let records = index
-        .get_all(key_range, None)
-        .await
-        .unwrap_or_default();
+    let records = index.get_all(key_range, None).await.unwrap_or_default();
     tx.done().await.ok();
     let mut rows: Vec<EventRow> = records
         .into_iter()
