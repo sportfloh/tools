@@ -204,6 +204,20 @@ The parsing helper `parse_add_param_raw` is pure Rust (no WASM APIs) and is cove
 
 `index.html` → `manifest.json` + `public/service-worker.js` + `public/icon.svg`. Trunk copies these into `dist/` at build time (`copy-file` / `copy-dir` directives in `index.html`).
 
+## Git workflow
+
+- **`main`** is the default and protected branch. All deployments to GitHub
+  Pages happen automatically when a commit lands on `main` via a merged PR.
+- **Never push directly to `main`.** All work happens on a short-lived
+  `claude/<feature>-<session-id>` branch, then merges via a pull request.
+- Branch names must start with `claude/` — the git proxy enforces this.
+
+```
+main  ←── PR merge ←── claude/<feature>-<session-id>
+  │
+  └── triggers deploy.yml → GitHub Pages
+```
+
 ## Self-Maintenance Rule
 
 After every major change, update this file to reflect the current state. Specifically:
