@@ -5,20 +5,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```sh
-# Develop with live reload (serves on http://localhost:8080)
-trunk serve
+# Develop trackit with live reload (serves on http://localhost:8080)
+cd tools/trackit && trunk serve
 
-# Production build (output in dist/)
-trunk build --release
+# Production build for trackit (output in tools/trackit/dist/)
+cd tools/trackit && trunk build --release
 
-# Format
+# Format (workspace root — applies to all tools)
 cargo fmt
 
-# Lint (target must be specified — this is WASM-only)
+# Lint (workspace root — target must be specified, all tools are WASM-only)
 cargo clippy --target wasm32-unknown-unknown -- -D warnings
 
-# Run native unit tests
+# Run native unit tests (workspace root)
 cargo test --lib
+```
 
 The pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt` then `cargo clippy`. Activate it once per clone:
 
@@ -29,11 +30,11 @@ git config core.hooksPath .githooks
 ## Tests
 
 ```sh
-# Native unit tests (no WASM toolchain needed)
+# Native unit tests (workspace root — no WASM toolchain needed)
 cargo test --lib
 
-# WASM integration tests (requires Chrome or Firefox)
-wasm-pack test --headless --chrome
+# WASM integration tests (from the tool directory — requires Chrome or Firefox)
+cd tools/trackit && wasm-pack test --headless --chrome
 ```
 
 ### Current coverage (14 native + 21 WASM tests)
@@ -105,15 +106,39 @@ Every new feature **must** follow the red → green → refactor cycle:
 
 Prefer native tests wherever possible; they are faster and need no browser.
 
-## Source modules
+## Repository layout
+
+This is a Cargo workspace monorepo. Each tool lives under `tools/<name>/` and
+is served at `https://<host>/tools/<name>/`.
+
+```
+Cargo.toml               ← workspace manifest + shared [profile.release]
+Cargo.lock               ← workspace lock file
+rust-toolchain.toml      ← stable + wasm32-unknown-unknown
+tools/
+└── trackit/             ← served at /tools/trackit/
+    ├── Cargo.toml
+    ├── Trunk.toml
+    ├── index.html
+    ├── manifest.json
+    ├── src/
+    ├── style/
+    └── public/
+```
+
+To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
+`Trunk.toml`, then add `"tools/<name>"` to the `members` list in the root
+`Cargo.toml`.
+
+## Source modules (trackit)
 
 | File | Purpose |
 |------|---------|
-| `src/main.rs` | Entry point — mounts the Leptos app |
-| `src/app.rs` | All UI components and signal wiring |
-| `src/db.rs` | IndexedDB access via `rexie` |
-| `src/time.rs` | Timestamp helpers, count computation, import/export |
-| `src/lib.rs` | Re-exports for the `trackitlib` rlib crate |
+| `tools/trackit/src/main.rs` | Entry point — mounts the Leptos app |
+| `tools/trackit/src/app.rs` | All UI components and signal wiring |
+| `tools/trackit/src/db.rs` | IndexedDB access via `rexie` |
+| `tools/trackit/src/time.rs` | Timestamp helpers, count computation, import/export |
+| `tools/trackit/src/lib.rs` | Re-exports for the `trackitlib` rlib crate |
 
 ## Key dependencies
 
@@ -129,7 +154,7 @@ Rust edition: **2024**.
 
 ## Architecture
 
-Single-page PWA built with **Leptos** (CSR/WASM) and **Trunk**. Entry point is `src/main.rs`; logic is split across modules (`src/app.rs`, `src/db.rs`, etc.).
+Single-page PWA built with **Leptos** (CSR/WASM) and **Trunk**. Entry point is `tools/trackit/src/main.rs`; logic is split across modules (`src/app.rs`, `src/db.rs`, etc.).
 
 ### Data layer
 
