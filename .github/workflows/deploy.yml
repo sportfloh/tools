@@ -6,6 +6,12 @@ on:
       - 'claude/**'
       - main
       - master
+    paths:
+      - 'tools/trackit/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 # Force remaining node20 actions (actions/deploy-pages has no node24 release yet)
