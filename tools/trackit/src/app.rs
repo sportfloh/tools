@@ -711,7 +711,7 @@ pub fn App() -> impl IntoView {
             }
         }
 
-        DB.with(|cell| *cell.borrow_mut() = Some(db));
+        DB.with(|cell| *cell.borrow_mut() = Some(std::rc::Rc::new(db)));
         topic_list.set(headers.into_iter().map(RwSignal::new).collect());
         db_ready_signal.set(true);
     });

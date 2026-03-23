@@ -145,7 +145,7 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | Crate | Version | Role |
 |-------|---------|------|
 | `leptos` | 0.8 (CSR) | Reactive UI framework |
-| `rexie` | 0.5 | IndexedDB async wrapper |
+| `rexie` | 0.6 | IndexedDB async wrapper |
 | `serde` / `serde_json` | 1.0 | Serialisation |
 | `wasm-bindgen` / `js-sys` / `web-sys` | latest | WASM ↔ JS bridge |
 | `wasm-bindgen-futures` | 0.4 | Await JS Promises from async Rust (used for Geolocation) |

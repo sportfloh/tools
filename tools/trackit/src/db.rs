@@ -1,6 +1,7 @@
 use rexie::{Index, KeyRange, ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
+use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
 // ─── Data model ──────────────────────────────────────────────────────────────
@@ -43,10 +44,10 @@ pub struct EventRow {
 
 // Avoids Send + Sync requirement on Rexie.
 thread_local! {
-    pub(crate) static DB: RefCell<Option<Rexie>> = const { RefCell::new(None) };
+    pub(crate) static DB: RefCell<Option<Rc<Rexie>>> = const { RefCell::new(None) };
 }
 
-pub(crate) fn get_db() -> Option<Rexie> {
+pub(crate) fn get_db() -> Option<Rc<Rexie>> {
     DB.with(|db| db.borrow().clone())
 }
 
@@ -76,13 +77,13 @@ pub(crate) async fn load_topic_headers(db: &Rexie) -> Vec<TopicHeader> {
         Err(_) => return Vec::new(),
     };
     let records = store
-        .get_all(None, None, None, None)
+        .get_all(None, None)
         .await
         .unwrap_or_default();
     tx.done().await.ok();
     records
         .into_iter()
-        .filter_map(|(_k, v)| serde_wasm_bindgen::from_value::<TopicHeader>(v).ok())
+        .filter_map(|v| serde_wasm_bindgen::from_value::<TopicHeader>(v).ok())
         .collect()
 }
 
@@ -116,13 +117,13 @@ pub(crate) async fn load_events_for_topic(db: &Rexie, topic_id: &str) -> Vec<Eve
     };
     let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
     let records = index
-        .get_all(key_range.as_ref(), None, None, None)
+        .get_all(key_range, None)
         .await
         .unwrap_or_default();
     tx.done().await.ok();
     let mut rows: Vec<EventRow> = records
         .into_iter()
-        .filter_map(|(_k, v)| serde_wasm_bindgen::from_value::<EventRow>(v).ok())
+        .filter_map(|v| serde_wasm_bindgen::from_value::<EventRow>(v).ok())
         .collect();
     rows.sort_by(|a, b| {
         b.timestamp_ms
@@ -171,7 +172,7 @@ pub(crate) async fn delete_event_idb(db: &Rexie, event_id: &str) {
         Ok(s) => s,
         Err(_) => return,
     };
-    store.delete(&JsValue::from_str(event_id)).await.ok();
+    store.delete(JsValue::from_str(event_id)).await.ok();
     tx.done().await.ok();
 }
 
@@ -185,16 +186,16 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
         && let Ok(index) = ev_store.index("by_topic")
     {
         let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
-        if let Ok(records) = index.get_all(key_range.as_ref(), None, None, None).await {
-            for (_k, v) in records {
+        if let Ok(records) = index.get_all(key_range, None).await {
+            for v in records {
                 if let Ok(row) = serde_wasm_bindgen::from_value::<EventRow>(v) {
-                    ev_store.delete(&JsValue::from_str(&row.id)).await.ok();
+                    ev_store.delete(JsValue::from_str(&row.id)).await.ok();
                 }
             }
         }
     }
     if let Ok(t_store) = tx.store("topics") {
-        t_store.delete(&JsValue::from_str(topic_id)).await.ok();
+        t_store.delete(JsValue::from_str(topic_id)).await.ok();
     }
     tx.done().await.ok();
 }
