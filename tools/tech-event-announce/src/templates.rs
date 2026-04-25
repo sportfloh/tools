@@ -1,7 +1,7 @@
 pub fn chat(date: &str, topic: &str, description: &str) -> String {
     format!(
         "Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
-         {description}\n\n\
+         {description}\n\
          Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
          Diese Info dürft Ihr gerne weiterleiten."
     )
@@ -15,7 +15,7 @@ pub fn email_body(date: &str, topic: &str, description: &str) -> String {
     format!(
         "Hallo Zusammen,\n\n\
          Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
-         {description}\n\n\
+         {description}\n\
          Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
          Diese Info dürft Ihr gerne weiterleiten.\n\n\
          Gruß,\n\
