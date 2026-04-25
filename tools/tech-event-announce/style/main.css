@@ -73,17 +73,6 @@ html, body {
   padding-bottom: max(32px, env(safe-area-inset-bottom, 32px));
 }
 
-/* Single column on narrow viewports */
-@media (max-width: 768px) {
-  .app-main {
-    grid-template-columns: 1fr;
-  }
-
-  .form-card {
-    position: static;
-  }
-}
-
 /* ── Input form card (left column, sticky) ─────────────────────────────────── */
 .form-card {
   background: var(--color-surface);
@@ -95,6 +84,17 @@ html, body {
   gap: 14px;
   position: sticky;
   top: calc(44px + env(safe-area-inset-top, 0px) + 16px);
+}
+
+/* Single column on narrow viewports */
+@media (max-width: 768px) {
+  .app-main {
+    grid-template-columns: 1fr;
+  }
+
+  .form-card {
+    position: static;
+  }
 }
 
 .form-field {
