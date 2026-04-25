@@ -1,0 +1,211 @@
+/* ── Reset & base ──────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  color-scheme: light;
+  --color-primary:      #4a90e2;
+  --color-primary-dark: #2e6fbf;
+  --color-bg:           #f2f2f7;
+  --color-surface:      #ffffff;
+  --color-border:       #e0e6ed;
+  --color-text:         #1a2332;
+  --color-muted:        #6b7a8d;
+  --radius:             12px;
+  --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── App shell ─────────────────────────────────────────────────────────────── */
+.app {
+  position: fixed;
+  inset: 0;
+  max-width: 640px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.app-header {
+  background: #1c1c1e;
+  color: white;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  padding: 0 16px;
+}
+
+.header-bar h1 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -.25px;
+}
+
+/* ── Main scrollable area ──────────────────────────────────────────────────── */
+.app-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-bottom: max(32px, env(safe-area-inset-bottom, 32px));
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* ── Input form card ───────────────────────────────────────────────────────── */
+.form-card {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-label {
+  font-size: .8125rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  letter-spacing: .02em;
+  text-transform: uppercase;
+}
+
+.form-input,
+.form-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 1rem;
+  font-family: inherit;
+  background: var(--color-bg);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color .15s;
+}
+.form-input:focus,
+.form-textarea:focus {
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+.form-input::placeholder,
+.form-textarea::placeholder {
+  color: var(--color-muted);
+}
+
+.form-textarea {
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
+}
+
+/* ── Output cards ──────────────────────────────────────────────────────────── */
+.output-card {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.output-title {
+  font-size: .9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.btn-copy {
+  padding: 5px 14px;
+  border: 1.5px solid var(--color-primary);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: .8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-copy:active,
+.btn-copy.copied {
+  background: var(--color-primary);
+  color: white;
+}
+
+.output-text {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: .875rem;
+  color: var(--color-text);
+  line-height: 1.6;
+  resize: none;
+  cursor: default;
+  /* avoid browser styling of readonly */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
+.app-main::-webkit-scrollbar       { width: 4px; }
+.app-main::-webkit-scrollbar-track { background: transparent; }
+.app-main::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
+
+/* ── Dark mode ─────────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-primary:  #5b9fe8;
+    --color-bg:       #000000;
+    --color-surface:  #1c1c1e;
+    --color-border:   #38383a;
+    --color-text:     #e6edf3;
+    --color-muted:    #8e8e93;
+    --shadow:         0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
+  }
+}
+
+@media (inverted-colors: inverted) {
+  .app-header { filter: invert(1); }
+}
