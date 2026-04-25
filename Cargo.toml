@@ -1,5 +1,5 @@
 [workspace]
-members = ["tools/trackit"]
+members = ["tools/trackit", "tools/tech-event-announce"]
 resolver = "2"
 
 [profile.release]

@@ -1,0 +1,19 @@
+{
+  "name": "Tech-Event Announce",
+  "short_name": "TEA",
+  "description": "Generate Tech-Event announcements for Chat, E-Mail and Mastodon.",
+  "start_url": "/tools/tech-event-announce/",
+  "scope": "/tools/tech-event-announce/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f5f7fa",
+  "theme_color": "#4a90e2",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
