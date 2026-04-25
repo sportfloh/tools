@@ -1,7 +1,7 @@
 pub fn chat(date: &str, topic: &str, description: &str) -> String {
     format!(
         "Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
-         {description}\n\
+         {description}\n\n\
          Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
          Diese Info dürft Ihr gerne weiterleiten."
     )
@@ -15,7 +15,7 @@ pub fn email_body(date: &str, topic: &str, description: &str) -> String {
     format!(
         "Hallo Zusammen,\n\n\
          Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
-         {description}\n\
+         {description}\n\n\
          Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
          Diese Info dürft Ihr gerne weiterleiten.\n\n\
          Gruß,\n\
@@ -41,7 +41,10 @@ mod tests {
         let r = chat("08.11.2025", "Rust im Alltag", "Ein Vortrag über Rust.");
         assert!(r.contains("Samstag (08.11.2025)"), "missing date in parens");
         assert!(r.contains("zum Thema: Rust im Alltag"), "missing topic");
-        assert!(r.contains("Ein Vortrag über Rust."), "missing description");
+        assert!(
+            r.contains("Ein Vortrag über Rust.\n\nWir"),
+            "description must be followed by blank line"
+        );
         assert!(r.contains("14 Uhr"), "missing time");
         assert!(r.contains("kostenlos"), "missing free-entry line");
         assert!(r.contains("weiterleiten"), "missing forward-info line");
@@ -81,7 +84,10 @@ mod tests {
         assert!(r.starts_with("Hallo Zusammen,"), "must start with greeting");
         assert!(r.contains("Samstag (08.11.2025)"));
         assert!(r.contains("zum Thema: Rust im Alltag"));
-        assert!(r.contains("Ein Vortrag über Rust."));
+        assert!(
+            r.contains("Ein Vortrag über Rust.\n\nWir"),
+            "description must be followed by blank line"
+        );
         assert!(r.contains("kostenlos"));
         assert!(r.contains("Gruß,"), "missing sign-off");
         assert!(r.contains("sportfloh"), "missing name");
