@@ -1,16 +1,34 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 use crate::templates;
 
+/// Returns the date of the next Saturday (from today) as `DD.MM.YYYY`.
+/// If today is Saturday, returns next week's Saturday.
+fn next_saturday_str() -> String {
+    let now = js_sys::Date::new_0();
+    let day = now.get_day() as i32; // 0 = Sunday … 6 = Saturday
+    let days_ahead = {
+        let d = (6 - day).rem_euclid(7);
+        if d == 0 { 7 } else { d }
+    };
+    let target_ms = now.get_time() + days_ahead as f64 * 86_400_000.0;
+    let t = js_sys::Date::new(&JsValue::from_f64(target_ms));
+    format!(
+        "{:02}.{:02}.{:04}",
+        t.get_date(),
+        t.get_month() + 1,
+        t.get_full_year()
+    )
+}
+
 #[component]
 pub fn App() -> impl IntoView {
-    let date_raw = RwSignal::new(String::new()); // YYYY-MM-DD from <input type="date">
+    // Date is stored and displayed directly as DD.MM.YYYY — no conversion layer.
+    let date = RwSignal::new(next_saturday_str());
     let topic = RwSignal::new(String::new());
     let descr = RwSignal::new(String::new());
-
-    // Formatted date (DD.MM.YYYY) derived from the raw ISO value.
-    let date = Memo::new(move |_| templates::format_date(&date_raw.get()));
 
     let chat_text = Memo::new(move |_| templates::chat(&date.get(), &topic.get(), &descr.get()));
     let email_subj = Memo::new(move |_| templates::email_subject(&date.get(), &topic.get()));
@@ -27,15 +45,17 @@ pub fn App() -> impl IntoView {
                 </div>
             </header>
             <main class="app-main">
+                // ── Left column: inputs ──────────────────────────────────────
                 <section class="form-card">
                     <div class="form-field">
                         <label class="form-label" for="inp-date">"Datum"</label>
                         <input
                             id="inp-date"
-                            type="date"
+                            type="text"
                             class="form-input"
-                            prop:value=date_raw
-                            on:input=move |ev| date_raw.set(event_target_value(&ev))
+                            placeholder="dd.mm.yyyy"
+                            prop:value=date
+                            on:input=move |ev| date.set(event_target_value(&ev))
                         />
                     </div>
                     <div class="form-field">
@@ -62,17 +82,20 @@ pub fn App() -> impl IntoView {
                     </div>
                 </section>
 
-                <OutputCard title="Chat" text=chat_text rows="6"/>
-                <OutputCard title="E-Mail Betreff" text=email_subj rows="2"/>
-                <OutputCard title="E-Mail Body" text=email_body rows="11"/>
-                <OutputCard title="Mastodon" text=mastodon_text rows="5"/>
+                // ── Right column: outputs ────────────────────────────────────
+                <div class="outputs-col">
+                    <OutputCard title="Chat" text=chat_text/>
+                    <OutputCard title="EmailBetreff" text=email_subj/>
+                    <OutputCard title="EmailBody" text=email_body/>
+                    <OutputCard title="Mastodon" text=mastodon_text/>
+                </div>
             </main>
         </div>
     }
 }
 
 #[component]
-fn OutputCard(title: &'static str, text: Memo<String>, rows: &'static str) -> impl IntoView {
+fn OutputCard(title: &'static str, text: Memo<String>) -> impl IntoView {
     let copied = RwSignal::new(false);
 
     let on_copy = move |_| {
@@ -107,7 +130,7 @@ fn OutputCard(title: &'static str, text: Memo<String>, rows: &'static str) -> im
             <textarea
                 class="output-text"
                 readonly
-                rows=rows
+                rows=move || text.get().lines().count().to_string()
                 prop:value=move || text.get()
             />
         </div>

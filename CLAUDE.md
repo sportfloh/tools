@@ -37,7 +37,7 @@ cargo test --lib
 cd tools/trackit && wasm-pack test --headless --chrome
 ```
 
-### Current coverage (14 native + 21 WASM tests)
+### Current coverage (20 native + 21 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -55,6 +55,12 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `parse_bulk_import_invalid_returns_none` | native | `time.rs` | malformed JSON and missing fields return `None` |
 | `parse_add_param_raw_present` | native | `app.rs` | `?add=` param is extracted correctly, including encoded values |
 | `parse_add_param_raw_absent` | native | `app.rs` | missing / non-matching params return `None` |
+| `chat_renders_full_template` | native | `templates.rs` (TEA) | all placeholders appear in the Chat output |
+| `chat_with_empty_inputs_preserves_structure` | native | `templates.rs` (TEA) | empty inputs keep template frame intact |
+| `email_subject_renders_correctly` | native | `templates.rs` (TEA) | subject line matches expected format |
+| `email_subject_empty_inputs` | native | `templates.rs` (TEA) | empty inputs produce correct empty-slot subject |
+| `email_body_renders_full_template` | native | `templates.rs` (TEA) | greeting, placeholders, sign-off all present |
+| `mastodon_renders_correctly` | native | `templates.rs` (TEA) | date+time inline, topic and description present |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
