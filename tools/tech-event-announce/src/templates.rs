@@ -1,21 +1,3 @@
-/// Convert `YYYY-MM-DD` (from `<input type="date">`) to `DD.MM.YYYY`.
-/// Returns an empty string for empty or malformed input.
-pub fn format_date(yyyy_mm_dd: &str) -> String {
-    if yyyy_mm_dd.len() != 10 {
-        return String::new();
-    }
-    let b = yyyy_mm_dd.as_bytes();
-    if b[4] != b'-' || b[7] != b'-' {
-        return String::new();
-    }
-    format!(
-        "{}.{}.{}",
-        &yyyy_mm_dd[8..10],
-        &yyyy_mm_dd[5..7],
-        &yyyy_mm_dd[0..4]
-    )
-}
-
 pub fn chat(date: &str, topic: &str, description: &str) -> String {
     format!(
         "Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
@@ -51,24 +33,6 @@ pub fn mastodon(date: &str, topic: &str, description: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // --- format_date ---
-
-    #[test]
-    fn format_date_converts_iso_to_german() {
-        assert_eq!(format_date("2025-11-08"), "08.11.2025");
-    }
-
-    #[test]
-    fn format_date_empty_returns_empty() {
-        assert_eq!(format_date(""), "");
-    }
-
-    #[test]
-    fn format_date_invalid_returns_empty() {
-        assert_eq!(format_date("not-a-date"), "");
-        assert_eq!(format_date("2025/11/08"), "");
-    }
 
     // --- chat ---
 
