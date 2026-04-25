@@ -30,12 +30,29 @@ pub fn App() -> impl IntoView {
     let topic = RwSignal::new(String::new());
     let descr = RwSignal::new(String::new());
 
-    let chat_text = Memo::new(move |_| templates::chat(&date.get(), &topic.get(), &descr.get()));
-    let email_subj = Memo::new(move |_| templates::email_subject(&date.get(), &topic.get()));
-    let email_body =
-        Memo::new(move |_| templates::email_body(&date.get(), &topic.get(), &descr.get()));
-    let mastodon_text =
-        Memo::new(move |_| templates::mastodon(&date.get(), &topic.get(), &descr.get()));
+    let chat_text = Memo::new(move |_| {
+        let d = date.get();
+        let t = topic.get();
+        let de = descr.get();
+        templates::chat(d.trim(), t.trim(), de.trim())
+    });
+    let email_subj = Memo::new(move |_| {
+        let d = date.get();
+        let t = topic.get();
+        templates::email_subject(d.trim(), t.trim())
+    });
+    let email_body = Memo::new(move |_| {
+        let d = date.get();
+        let t = topic.get();
+        let de = descr.get();
+        templates::email_body(d.trim(), t.trim(), de.trim())
+    });
+    let mastodon_text = Memo::new(move |_| {
+        let d = date.get();
+        let t = topic.get();
+        let de = descr.get();
+        templates::mastodon(d.trim(), t.trim(), de.trim())
+    });
 
     view! {
         <div class="app">
@@ -74,7 +91,6 @@ pub fn App() -> impl IntoView {
                         <textarea
                             id="inp-descr"
                             class="form-textarea"
-                            rows="4"
                             placeholder="Kurze Beschreibung des Themas…"
                             prop:value=descr
                             on:input=move |ev| descr.set(event_target_value(&ev))
@@ -130,7 +146,6 @@ fn OutputCard(title: &'static str, text: Memo<String>) -> impl IntoView {
             <textarea
                 class="output-text"
                 readonly
-                rows=move || text.get().lines().count().to_string()
                 prop:value=move || text.get()
             />
         </div>
