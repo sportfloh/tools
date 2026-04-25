@@ -54,6 +54,12 @@ pub fn App() -> impl IntoView {
         templates::mastodon(d.trim(), t.trim(), de.trim())
     });
 
+    let inputs_complete = Memo::new(move |_| {
+        !date.get().trim().is_empty()
+            && !topic.get().trim().is_empty()
+            && !descr.get().trim().is_empty()
+    });
+
     view! {
         <div class="app">
             <header class="app-header">
@@ -100,10 +106,10 @@ pub fn App() -> impl IntoView {
 
                 // ── Right column: outputs ────────────────────────────────────
                 <div class="outputs-col">
-                    <OutputCard title="Chat" text=chat_text/>
-                    <OutputCard title="EmailBetreff" text=email_subj/>
-                    <OutputCard title="EmailBody" text=email_body/>
-                    <OutputCard title="Mastodon" text=mastodon_text/>
+                    <OutputCard title="Chat" text=chat_text enabled=inputs_complete/>
+                    <OutputCard title="EmailBetreff" text=email_subj enabled=inputs_complete/>
+                    <OutputCard title="EmailBody" text=email_body enabled=inputs_complete/>
+                    <OutputCard title="Mastodon" text=mastodon_text enabled=inputs_complete char_limit=500_u32/>
                 </div>
             </main>
         </div>
@@ -111,7 +117,12 @@ pub fn App() -> impl IntoView {
 }
 
 #[component]
-fn OutputCard(title: &'static str, text: Memo<String>) -> impl IntoView {
+fn OutputCard(
+    title: &'static str,
+    text: Memo<String>,
+    enabled: Memo<bool>,
+    #[prop(optional)] char_limit: Option<u32>,
+) -> impl IntoView {
     let copied = RwSignal::new(false);
 
     let on_copy = move |_| {
@@ -135,9 +146,23 @@ fn OutputCard(title: &'static str, text: Memo<String>) -> impl IntoView {
     view! {
         <div class="output-card">
             <div class="output-header">
-                <span class="output-title">{title}</span>
+                <div class="output-title-group">
+                    <span class="output-title">{title}</span>
+                    {char_limit.map(|limit| view! {
+                        <span class=move || {
+                            if text.get().chars().count() > limit as usize {
+                                "char-count over-limit"
+                            } else {
+                                "char-count"
+                            }
+                        }>
+                            {move || format!("{}/{}", text.get().chars().count(), limit)}
+                        </span>
+                    })}
+                </div>
                 <button
                     class=move || if copied.get() { "btn-copy copied" } else { "btn-copy" }
+                    disabled=move || !enabled.get()
                     on:click=on_copy
                 >
                     {move || if copied.get() { "Kopiert!" } else { "Kopieren" }}

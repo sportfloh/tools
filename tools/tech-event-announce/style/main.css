@@ -16,6 +16,7 @@
   --color-muted:        #6b7a8d;
   --radius:             12px;
   --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
+  --color-danger:       #d32f2f;
 }
 
 html, body {
@@ -161,10 +162,26 @@ html, body {
   border-bottom: 1px solid var(--color-border);
 }
 
+.output-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .output-title {
   font-size: .9375rem;
   font-weight: 600;
   color: var(--color-text);
+}
+
+.char-count {
+  font-size: .75rem;
+  color: var(--color-muted);
+}
+
+.char-count.over-limit {
+  color: var(--color-danger);
+  font-weight: 600;
 }
 
 .btn-copy {
@@ -184,6 +201,12 @@ html, body {
 .btn-copy.copied {
   background: var(--color-primary);
   color: white;
+}
+.btn-copy:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  border-color: var(--color-border);
+  color: var(--color-muted);
 }
 
 .output-text {
@@ -220,6 +243,7 @@ html, body {
     --color-text:     #e6edf3;
     --color-muted:    #8e8e93;
     --shadow:         0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
+    --color-danger:   #ef5350;
   }
 }
 
