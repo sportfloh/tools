@@ -37,7 +37,7 @@ cargo test --lib
 cd tools/trackit && wasm-pack test --headless --chrome
 ```
 
-### Current coverage (20 native + 21 WASM tests)
+### Current coverage (20 native + 22 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -81,6 +81,7 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `idb_save_topic_header_overwrites` | WASM | `db.rs` | saving same topic ID twice overwrites counts (upsert) |
 | `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
 | `idb_refresh_topic_counts` | WASM | `db.rs` | `refresh_topic_counts_idb` replaces stale counts with correct recomputed values |
+| `idb_add_event_and_update_header_atomic` | WASM | `db.rs` | event and header written atomically; both present in IDB after success |
 | `refresh_all_counts_corrects_stale_signal` | WASM | `app.rs` | `refresh_all_topic_counts` updates stale Leptos signals to match recomputed IDB counts |
 
 ## TDD Workflow

@@ -1,7 +1,7 @@
 use crate::db::{
-    DB, EventRow, TopicHeader, add_event_idb, delete_event_idb, delete_topic_idb, get_db,
-    load_events_for_topic, load_topic_headers, open_db, refresh_topic_counts_idb,
-    save_topic_header,
+    DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
+    delete_topic_idb, get_db, load_events_for_topic, load_topic_headers, open_db,
+    refresh_topic_counts_idb, save_topic_header,
 };
 use crate::time::{
     event_row_counts, export_all, export_topic, format_timestamp, new_id, now_local_datetime_str,
@@ -118,22 +118,18 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
         };
         let row2 = row.clone();
         spawn_local(async move {
-            add_event_idb(&db, &row2).await;
             let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
             let ms = row2.timestamp_ms;
-            topic_signal.update(|h| {
-                h.count_total += 1;
-                if ms >= today_start && ms < today_end {
-                    h.count_today += 1;
-                }
-                if ms >= week_start && ms <= now_ms {
-                    h.count_week += 1;
-                }
-                if ms >= month_start {
-                    h.count_month += 1;
-                }
+            let updated = topic_signal.with_untracked(|h| TopicHeader {
+                count_total: h.count_total + 1,
+                count_today: h.count_today + (ms >= today_start && ms < today_end) as u32,
+                count_week: h.count_week + (ms >= week_start && ms <= now_ms) as u32,
+                count_month: h.count_month + (ms >= month_start) as u32,
+                ..h.clone()
             });
-            save_topic_header(&db, &topic_signal.get_untracked()).await;
+            if add_event_and_update_header_idb(&db, &row2, &updated).await {
+                topic_signal.set(updated);
+            }
             // Background: enrich with GPS once acquired
             if let Some(gps) = get_gps().await {
                 let enriched = EventRow {
@@ -299,30 +295,26 @@ pub fn TopicDetail() -> impl IntoView {
                 accuracy: None,
                 altitude_accuracy: None,
             };
-            // Optimistic UI update
-            events.update(|evs| evs.insert(0, row.clone()));
-            all_evs.update_value(|v| v.insert(0, row.clone()));
             if let Some(db) = get_db() {
                 let row2 = row.clone();
                 spawn_local(async move {
-                    add_event_idb(&db, &row2).await;
                     let (now_ms, today_start, today_end, month_start, week_start) =
                         time_boundaries();
                     let ms = row2.timestamp_ms;
                     if let Some(sig) = current_header.get_untracked() {
-                        sig.update(|h| {
-                            h.count_total += 1;
-                            if ms >= today_start && ms < today_end {
-                                h.count_today += 1;
-                            }
-                            if ms >= week_start && ms <= now_ms {
-                                h.count_week += 1;
-                            }
-                            if ms >= month_start {
-                                h.count_month += 1;
-                            }
+                        let updated_header = sig.with_untracked(|h| TopicHeader {
+                            count_total: h.count_total + 1,
+                            count_today: h.count_today
+                                + (ms >= today_start && ms < today_end) as u32,
+                            count_week: h.count_week + (ms >= week_start && ms <= now_ms) as u32,
+                            count_month: h.count_month + (ms >= month_start) as u32,
+                            ..h.clone()
                         });
-                        save_topic_header(&db, &sig.get_untracked()).await;
+                        if add_event_and_update_header_idb(&db, &row2, &updated_header).await {
+                            events.update(|evs| evs.insert(0, row2.clone()));
+                            all_evs.update_value(|v| v.insert(0, row2.clone()));
+                            sig.set(updated_header);
+                        }
                     }
                     // Background: enrich with GPS once acquired
                     if let Some(gps) = get_gps().await {
@@ -686,11 +678,12 @@ pub fn App() -> impl IntoView {
         // ── Handle ?add=<topic-name> ─────────────────────────────────────────
         if let Some(ref name) = pending_add {
             if let Some(header) = headers.iter_mut().find(|h| &h.name == name) {
+                let ts_ms = js_sys::Date::now();
                 let row = EventRow {
                     id: new_id(),
                     topic_id: header.id.clone(),
                     timestamp: now_timestamp(),
-                    timestamp_ms: js_sys::Date::now(),
+                    timestamp_ms: ts_ms,
                     lat: None,
                     lon: None,
                     altitude: None,
@@ -699,8 +692,18 @@ pub fn App() -> impl IntoView {
                     accuracy: None,
                     altitude_accuracy: None,
                 };
-                add_event_idb(&db, &row).await;
-                *header = refresh_topic_counts_idb(&db, header).await;
+                let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
+                let ms = ts_ms;
+                let updated = TopicHeader {
+                    count_total: header.count_total + 1,
+                    count_today: header.count_today + (ms >= today_start && ms < today_end) as u32,
+                    count_week: header.count_week + (ms >= week_start && ms <= now_ms) as u32,
+                    count_month: header.count_month + (ms >= month_start) as u32,
+                    ..header.clone()
+                };
+                if add_event_and_update_header_idb(&db, &row, &updated).await {
+                    *header = updated;
+                }
             }
             // Remove param so a reload does not re-fire the action.
             if let Some(w) = web_sys::window()
