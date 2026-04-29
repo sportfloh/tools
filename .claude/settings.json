@@ -1,4 +1,7 @@
 {
+  "env": {
+    "GH_TELEMETRY": "false"
+  },
   "hooks": {
     "PostToolUse": [
       {
