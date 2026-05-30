@@ -1,0 +1,252 @@
+/* ── Reset & base ──────────────────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  color-scheme: light;
+  --color-primary:      #4a90e2;
+  --color-primary-dark: #2e6fbf;
+  --color-bg:           #f2f2f7;
+  --color-surface:      #ffffff;
+  --color-border:       #e0e6ed;
+  --color-text:         #1a2332;
+  --color-muted:        #6b7a8d;
+  --radius:             12px;
+  --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
+  --color-danger:       #d32f2f;
+}
+
+html, body {
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── App shell ─────────────────────────────────────────────────────────────── */
+.app {
+  min-height: 100vh;
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.app-header {
+  background: #1c1c1e;
+  color: white;
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+  padding-top: env(safe-area-inset-top, 0px);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.header-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  padding: 0 16px;
+}
+
+.header-bar h1 {
+  font-size: 1.0625rem;
+  font-weight: 600;
+  letter-spacing: -.25px;
+}
+
+/* ── Main: two-column grid ─────────────────────────────────────────────────── */
+.app-main {
+  flex: 1;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) 1.6fr;
+  gap: 16px;
+  align-items: start;
+  padding-bottom: max(32px, env(safe-area-inset-bottom, 32px));
+}
+
+/* ── Input form card (left column, sticky) ─────────────────────────────────── */
+.form-card {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: sticky;
+  top: calc(44px + env(safe-area-inset-top, 0px) + 16px);
+}
+
+/* Single column on narrow viewports */
+@media (max-width: 768px) {
+  .app-main {
+    grid-template-columns: 1fr;
+  }
+
+  .form-card {
+    position: static;
+  }
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-label {
+  font-size: .8125rem;
+  font-weight: 600;
+  color: var(--color-muted);
+}
+
+.form-input,
+.form-textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 1rem;
+  font-family: inherit;
+  background: var(--color-bg);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color .15s;
+}
+.form-input:focus,
+.form-textarea:focus {
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+.form-input::placeholder,
+.form-textarea::placeholder {
+  color: var(--color-muted);
+}
+
+.form-textarea {
+  resize: none;
+  field-sizing: content;
+  min-height: 80px;
+  line-height: 1.5;
+}
+
+/* ── Right column: output cards ────────────────────────────────────────────── */
+.outputs-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.output-card {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.output-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.output-title {
+  font-size: .9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.char-count {
+  font-size: .75rem;
+  color: var(--color-muted);
+}
+
+.char-count.over-limit {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.btn-copy {
+  padding: 5px 14px;
+  border: 1.5px solid var(--color-primary);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: .8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-copy:active,
+.btn-copy.copied {
+  background: var(--color-primary);
+  color: white;
+}
+.btn-copy:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  border-color: var(--color-border);
+  color: var(--color-muted);
+}
+
+.output-text {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: .875rem;
+  color: var(--color-text);
+  line-height: 1.6;
+  resize: none;
+  field-sizing: content;
+  cursor: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
+.app-main::-webkit-scrollbar       { width: 4px; }
+.app-main::-webkit-scrollbar-track { background: transparent; }
+.app-main::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 2px; }
+
+/* ── Dark mode ─────────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --color-primary:  #5b9fe8;
+    --color-bg:       #000000;
+    --color-surface:  #1c1c1e;
+    --color-border:   #38383a;
+    --color-text:     #e6edf3;
+    --color-muted:    #8e8e93;
+    --shadow:         0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
+    --color-danger:   #ef5350;
+  }
+}
+
+@media (inverted-colors: inverted) {
+  .app-header { filter: invert(1); }
+}

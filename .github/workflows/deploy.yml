@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'tools/trackit/**'
+      - 'tools/tech-event-announce/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -57,18 +58,24 @@ jobs:
         working-directory: tools/trackit
         run: trunk build --release --public-url /tools/trackit/
 
-      - name: Verify trackit dist structure
+      - name: Build tech-event-announce
+        working-directory: tools/tech-event-announce
+        run: trunk build --release --public-url /tools/tech-event-announce/
+
+      - name: Verify dist structure
         run: |
           # SW and icon must be at the dist root (not in a public/ subdirectory)
           # for the service worker to register correctly and manifest icon to resolve.
           fail=0
-          for f in service-worker.js icon.svg; do
-            if [ ! -f "tools/trackit/dist/$f" ]; then
-              echo "FAIL: tools/trackit/dist/$f is missing"; fail=1
-            fi
-            if [ -f "tools/trackit/dist/public/$f" ]; then
-              echo "FAIL: tools/trackit/dist/public/$f exists — file is at the wrong path"; fail=1
-            fi
+          for tool in trackit tech-event-announce; do
+            for f in service-worker.js icon.svg; do
+              if [ ! -f "tools/$tool/dist/$f" ]; then
+                echo "FAIL: tools/$tool/dist/$f is missing"; fail=1
+              fi
+              if [ -f "tools/$tool/dist/public/$f" ]; then
+                echo "FAIL: tools/$tool/dist/public/$f exists — file is at the wrong path"; fail=1
+              fi
+            done
           done
           exit $fail
 
@@ -76,6 +83,8 @@ jobs:
         run: |
           mkdir -p dist/trackit
           cp -r tools/trackit/dist/. dist/trackit/
+          mkdir -p dist/tech-event-announce
+          cp -r tools/tech-event-announce/dist/. dist/tech-event-announce/
 
       - name: Create Pages artifact
         run: |

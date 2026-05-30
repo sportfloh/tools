@@ -157,6 +157,36 @@ pub(crate) async fn add_event_idb(db: &Rexie, row: &EventRow) {
     tx.done().await.ok();
 }
 
+pub(crate) async fn add_event_and_update_header_idb(
+    db: &Rexie,
+    row: &EventRow,
+    header: &TopicHeader,
+) -> bool {
+    let tx = match db.transaction(&["events", "topics"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let (ev_store, t_store) = match (tx.store("events"), tx.store("topics")) {
+        (Ok(e), Ok(t)) => (e, t),
+        _ => return false,
+    };
+    let ev_val = match serde_wasm_bindgen::to_value(row) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if ev_store.put(&ev_val, None).await.is_err() {
+        return false;
+    }
+    let hdr_val = match serde_wasm_bindgen::to_value(header) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    if t_store.put(&hdr_val, None).await.is_err() {
+        return false;
+    }
+    tx.done().await.is_ok()
+}
+
 pub(crate) async fn delete_event_idb(db: &Rexie, event_id: &str) {
     let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
         Ok(t) => t,
@@ -200,9 +230,9 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        EventRow, TopicHeader, add_event_idb, delete_event_idb, delete_topic_idb,
-        load_events_for_topic, load_topic_headers, open_db, refresh_topic_counts_idb,
-        save_topic_header,
+        EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
+        delete_topic_idb, load_events_for_topic, load_topic_headers, open_db,
+        refresh_topic_counts_idb, save_topic_header,
     };
     use wasm_bindgen_test::*;
 
@@ -324,6 +354,47 @@ mod wasm_tests {
             events[0].timestamp_ms >= events[1].timestamp_ms
                 && events[1].timestamp_ms >= events[2].timestamp_ms,
             "events should be in descending order by timestamp_ms"
+        );
+    }
+
+    // IDB: add_event_and_update_header_idb writes event + header atomically
+    #[wasm_bindgen_test]
+    async fn idb_add_event_and_update_header_atomic() {
+        let db = open_db().await;
+
+        let hdr = TopicHeader {
+            id: "topic-atomic-1".into(),
+            name: "Atomic test".into(),
+            count_total: 0,
+            count_today: 0,
+            count_week: 0,
+            count_month: 0,
+        };
+        save_topic_header(&db, &hdr).await;
+
+        let ev = test_event("ev-atomic-1", "topic-atomic-1", js_sys::Date::now());
+        let updated_hdr = TopicHeader {
+            count_total: 1,
+            ..hdr.clone()
+        };
+
+        let ok = add_event_and_update_header_idb(&db, &ev, &updated_hdr).await;
+        assert!(ok, "atomic write should succeed");
+
+        let topics = load_topic_headers(&db).await;
+        let saved = topics
+            .iter()
+            .find(|h| h.id == "topic-atomic-1")
+            .expect("topic must still exist");
+        assert_eq!(
+            saved.count_total, 1,
+            "count_total must be 1 after atomic write"
+        );
+
+        let events = load_events_for_topic(&db, "topic-atomic-1").await;
+        assert!(
+            events.iter().any(|e| e.id == "ev-atomic-1"),
+            "event must be present in IDB"
         );
     }
 
