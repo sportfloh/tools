@@ -37,7 +37,7 @@ cargo test --lib
 cd tools/trackit && wasm-pack test --headless --chrome
 ```
 
-### Current coverage (14 native + 21 WASM tests)
+### Current coverage (20 native + 22 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -55,6 +55,12 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `parse_bulk_import_invalid_returns_none` | native | `time.rs` | malformed JSON and missing fields return `None` |
 | `parse_add_param_raw_present` | native | `app.rs` | `?add=` param is extracted correctly, including encoded values |
 | `parse_add_param_raw_absent` | native | `app.rs` | missing / non-matching params return `None` |
+| `chat_renders_full_template` | native | `templates.rs` (TEA) | all placeholders appear in the Chat output |
+| `chat_with_empty_inputs_preserves_structure` | native | `templates.rs` (TEA) | empty inputs keep template frame intact |
+| `email_subject_renders_correctly` | native | `templates.rs` (TEA) | subject line matches expected format |
+| `email_subject_empty_inputs` | native | `templates.rs` (TEA) | empty inputs produce correct empty-slot subject |
+| `email_body_renders_full_template` | native | `templates.rs` (TEA) | greeting, placeholders, sign-off all present |
+| `mastodon_renders_correctly` | native | `templates.rs` (TEA) | date+time inline, topic and description present |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
@@ -75,6 +81,7 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `idb_save_topic_header_overwrites` | WASM | `db.rs` | saving same topic ID twice overwrites counts (upsert) |
 | `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
 | `idb_refresh_topic_counts` | WASM | `db.rs` | `refresh_topic_counts_idb` replaces stale counts with correct recomputed values |
+| `idb_add_event_and_update_header_atomic` | WASM | `db.rs` | event and header written atomically; both present in IDB after success |
 | `refresh_all_counts_corrects_stale_signal` | WASM | `app.rs` | `refresh_all_topic_counts` updates stale Leptos signals to match recomputed IDB counts |
 
 ## TDD Workflow
@@ -233,3 +240,13 @@ After every major change, update this file to reflect the current state. Specifi
 - **New feature** — write the failing test first (red), then implement (green), then update the coverage table in the Tests section
 
 Keep this file as the single source of truth for AI sessions working on this project.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
