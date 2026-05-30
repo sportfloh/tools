@@ -1,0 +1,47 @@
+{
+  "/home/user/tools/tools/trackit/manifest.json": {
+    "mtime": 1780168433.938906,
+    "ast_hash": "e28537dc5c3997aa729232036ed283d7",
+    "semantic_hash": "e28537dc5c3997aa729232036ed283d7"
+  },
+  "/home/user/tools/tools/trackit/src/app.rs": {
+    "mtime": 1780168434.8337703,
+    "ast_hash": "10d985a025a4af78bc1e9c0b9100d6ff",
+    "semantic_hash": "10d985a025a4af78bc1e9c0b9100d6ff"
+  },
+  "/home/user/tools/tools/trackit/src/lib.rs": {
+    "mtime": 1780168433.9408028,
+    "ast_hash": "611d3da4e1752421c881b4e1a5b6fa35",
+    "semantic_hash": "611d3da4e1752421c881b4e1a5b6fa35"
+  },
+  "/home/user/tools/tools/trackit/src/main.rs": {
+    "mtime": 1780168433.9408028,
+    "ast_hash": "e5c96bb13e66e541146d0ff3a5f17916",
+    "semantic_hash": "e5c96bb13e66e541146d0ff3a5f17916"
+  },
+  "/home/user/tools/tools/trackit/src/db.rs": {
+    "mtime": 1780168434.8337703,
+    "ast_hash": "5edbd9e18e8ef28dca394a2d1ea96965",
+    "semantic_hash": "5edbd9e18e8ef28dca394a2d1ea96965"
+  },
+  "/home/user/tools/tools/trackit/src/time.rs": {
+    "mtime": 1780168433.9408028,
+    "ast_hash": "2068bd7f672cf32964be07da614957aa",
+    "semantic_hash": "2068bd7f672cf32964be07da614957aa"
+  },
+  "/home/user/tools/tools/trackit/public/service-worker.js": {
+    "mtime": 1780168433.93978,
+    "ast_hash": "8478e3fd2a33df6bebf85ccd60f6835c",
+    "semantic_hash": "8478e3fd2a33df6bebf85ccd60f6835c"
+  },
+  "/home/user/tools/.githooks/pre-commit": {
+    "mtime": 1780168433.931574,
+    "ast_hash": "1a118f1578a443ac2a26b7adb3887d63",
+    "semantic_hash": "1a118f1578a443ac2a26b7adb3887d63"
+  },
+  "/home/user/tools/.claude/settings.json": {
+    "mtime": 1780168837.358746,
+    "ast_hash": "f44f7f4a439743d53d0601e6724d41c6",
+    "semantic_hash": "f44f7f4a439743d53d0601e6724d41c6"
+  }
+}
