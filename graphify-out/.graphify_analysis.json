@@ -1,0 +1,324 @@
+{
+  "communities": {
+    "0": [
+      "eventrow",
+      "src_time_bounds",
+      "src_time_bulk_export_serde_round_trip",
+      "src_time_bulkexport",
+      "src_time_empty_events_all_zero",
+      "src_time_ev",
+      "src_time_event_before_month_start_only_in_total",
+      "src_time_event_eight_days_ago_only_in_month",
+      "src_time_event_in_today_counts_all_periods",
+      "src_time_event_row_serde_round_trip",
+      "src_time_event_yesterday_not_today_but_in_week_and_month",
+      "src_time_format_timestamp_has_expected_shape",
+      "src_time_format_timestamp_shape_is_stable_for_any_valid_iso",
+      "src_time_mixed_events_correct_counts",
+      "src_time_new_id_has_numeric_dash_numeric_format",
+      "src_time_new_id_is_unique_across_calls",
+      "src_time_now_local_datetime_str",
+      "src_time_now_local_datetime_str_has_expected_shape",
+      "src_time_parse_bulk_import_invalid_returns_none",
+      "src_time_parse_bulk_import_valid",
+      "src_time_parse_empty_import_line_returns_none",
+      "src_time_parse_malformed_import_line_returns_none",
+      "src_time_parse_valid_import_line",
+      "src_time_stale_boundaries_miscount_crossed_day",
+      "src_time_topic_header_serde_round_trip",
+      "src_time_topicexport",
+      "time_event_row_counts",
+      "time_format_timestamp",
+      "time_new_id",
+      "time_parse_bulk_import",
+      "time_parse_import_line",
+      "tools_trackit_src_time_rs",
+      "tools_trackit_src_time_rs_option",
+      "tools_trackit_src_time_rs_string",
+      "tools_trackit_src_time_rs_vec"
+    ],
+    "1": [
+      "app_app",
+      "app_dbready",
+      "app_editing",
+      "app_parse_add_param_raw",
+      "app_showdetail",
+      "app_topiccard",
+      "app_topiclist",
+      "cargotoml_leptos",
+      "cargotoml_rexie",
+      "cargotoml_serde",
+      "cargotoml_wasm_bindgen",
+      "claudemd_bulk_export_format",
+      "claudemd_indexeddb",
+      "claudemd_leptos",
+      "claudemd_pertopic_export_format",
+      "claudemd_pwa",
+      "claudemd_tdd",
+      "claudemd_trackit",
+      "claudemd_url_action",
+      "db_db",
+      "db_delete_topic_idb",
+      "db_eventrow",
+      "db_open_db",
+      "db_topicheader",
+      "dependabotyml_cargo",
+      "lib_trackitlib",
+      "main_main",
+      "src_time_export_topic_does_not_panic",
+      "time_bulkexport",
+      "time_export_all",
+      "time_export_topic",
+      "time_topicexport",
+      "tools_trackit_src_time_rs_topicheader"
+    ],
+    "2": [
+      "app_refresh_all_topic_counts",
+      "cargotoml_js_sys",
+      "intoview",
+      "rc",
+      "rwsignal",
+      "src_app_app",
+      "src_app_dbready",
+      "src_app_editing",
+      "src_app_eventdetail",
+      "src_app_get_gps",
+      "src_app_gpssnapshot",
+      "src_app_parse_add_param_raw",
+      "src_app_parse_add_param_raw_absent",
+      "src_app_parse_add_param_raw_present",
+      "src_app_showdetail",
+      "src_app_showeventdetail",
+      "src_app_topiccard",
+      "src_app_topicdetail",
+      "src_db_get_db",
+      "src_time_now_timestamp_returns_iso_utc_string",
+      "src_time_time_boundaries_ordering_invariants",
+      "src_time_time_boundaries_today_span_is_exactly_one_day",
+      "src_time_time_boundaries_week_start_is_seven_days_before_now",
+      "time_now_timestamp",
+      "time_time_boundaries",
+      "tools_trackit_src_app_rs",
+      "tools_trackit_src_app_rs_option",
+      "tools_trackit_src_app_rs_rexie",
+      "tools_trackit_src_app_rs_topicheader",
+      "tools_trackit_src_db_rs_option",
+      "topiclist"
+    ],
+    "3": [
+      "db_add_event_idb",
+      "db_delete_event_idb",
+      "db_load_events_for_topic",
+      "db_load_topic_headers",
+      "db_refresh_topic_counts_idb",
+      "db_save_topic_header",
+      "src_app_refresh_all_counts_corrects_stale_signal",
+      "src_db_delete_topic_idb",
+      "src_db_eventrow",
+      "src_db_idb_add_and_load_events",
+      "src_db_idb_delete_event",
+      "src_db_idb_delete_topic_cascades",
+      "src_db_idb_load_events_sorted_descending",
+      "src_db_idb_refresh_topic_counts",
+      "src_db_idb_save_and_load_topic",
+      "src_db_idb_save_topic_header_overwrites",
+      "src_db_open_db",
+      "src_db_test_event",
+      "src_db_test_header",
+      "src_db_topicheader",
+      "tools_trackit_src_db_rs",
+      "tools_trackit_src_db_rs_rexie",
+      "tools_trackit_src_db_rs_string",
+      "tools_trackit_src_db_rs_vec"
+    ],
+    "4": [
+      "deploy_actions_cache",
+      "deploy_actions_checkout",
+      "deploy_build",
+      "deploy_cargo_binstall",
+      "deploy_deploy",
+      "deploy_deploy_pages",
+      "deploy_rust_toolchain",
+      "deploy_trunk",
+      "deploy_upload_artifact",
+      "deploy_workflow",
+      "icon_svg",
+      "index_html",
+      "index_trackit_bin",
+      "main_css",
+      "manifest_json",
+      "service_worker_js"
+    ],
+    "5": [
+      "tools_trackit_manifest_json",
+      "trackit_manifest_background_color",
+      "trackit_manifest_description",
+      "trackit_manifest_display",
+      "trackit_manifest_icons",
+      "trackit_manifest_name",
+      "trackit_manifest_orientation",
+      "trackit_manifest_scope",
+      "trackit_manifest_short_name",
+      "trackit_manifest_start_url",
+      "trackit_manifest_theme_color"
+    ],
+    "6": [
+      "claude_settings_env",
+      "claude_settings_env_gh_telemetry",
+      "claude_settings_hooks",
+      "claude_settings_hooks_posttooluse",
+      "claude_settings_hooks_pretooluse",
+      "claude_settings_json"
+    ],
+    "7": [
+      "app_get_gps",
+      "app_gpssnapshot",
+      "cargotoml_wasm_bindgen_futures",
+      "cargotoml_web_sys"
+    ],
+    "8": [
+      "src_main_main",
+      "tools_trackit_src_main_rs"
+    ],
+    "9": [
+      "tools_trackit_src_lib_rs"
+    ],
+    "10": [
+      "tools_trackit_public_service_worker_js"
+    ],
+    "11": [
+      "dependabotyml_github_actions"
+    ],
+    "12": [
+      "app_showeventdetail"
+    ]
+  },
+  "cohesion": {
+    "0": 0.11260504201680673,
+    "1": 0.11363636363636363,
+    "2": 0.10752688172043011,
+    "3": 0.30434782608695654,
+    "4": 0.19166666666666668,
+    "5": 0.18181818181818182,
+    "6": 0.3333333333333333,
+    "7": 0.5,
+    "8": 1.0,
+    "9": 1.0,
+    "10": 1.0,
+    "11": 1.0,
+    "12": 1.0
+  },
+  "gods": [
+    {
+      "id": "app_app",
+      "label": "App Root Component",
+      "degree": 25
+    },
+    {
+      "id": "src_app_app",
+      "label": "App()",
+      "degree": 20
+    },
+    {
+      "id": "db_save_topic_header",
+      "label": "save_topic_header()",
+      "degree": 17
+    },
+    {
+      "id": "db_add_event_idb",
+      "label": "add_event_idb()",
+      "degree": 15
+    },
+    {
+      "id": "db_eventrow",
+      "label": "EventRow Struct",
+      "degree": 13
+    },
+    {
+      "id": "db_load_events_for_topic",
+      "label": "load_events_for_topic()",
+      "degree": 13
+    },
+    {
+      "id": "time_event_row_counts",
+      "label": "event_row_counts()",
+      "degree": 13
+    },
+    {
+      "id": "src_app_topiccard",
+      "label": "TopicCard()",
+      "degree": 12
+    },
+    {
+      "id": "db_refresh_topic_counts_idb",
+      "label": "refresh_topic_counts_idb()",
+      "degree": 12
+    },
+    {
+      "id": "time_export_all",
+      "label": "export_all()",
+      "degree": 12
+    }
+  ],
+  "surprises": [
+    {
+      "source": "export_topic()",
+      "target": "Per-Topic Plain-Text Export Format",
+      "source_files": [
+        "tools/trackit/src/time.rs",
+        "CLAUDE.md"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "implements",
+      "why": "crosses file types (doc \u2194 code); connects across different repos/directories; peripheral node `Per-Topic Plain-Text Export Format` unexpectedly reaches hub `export_topic()`"
+    },
+    {
+      "source": "Trunk Build Tool",
+      "target": "trackit PWA Icon",
+      "source_files": [
+        ".github/workflows/deploy.yml",
+        "tools/trackit/public/icon.svg"
+      ],
+      "confidence": "INFERRED",
+      "relation": "references",
+      "why": "inferred connection - not explicitly stated in source; crosses file types (doc \u2194 image); connects across different repos/directories"
+    },
+    {
+      "source": "open_db() Async Initializer",
+      "target": "IndexedDB Storage Concept",
+      "source_files": [
+        "tools/trackit/src/db.rs",
+        "CLAUDE.md"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "implements",
+      "why": "crosses file types (doc \u2194 code); connects across different repos/directories"
+    },
+    {
+      "source": "BulkExport Struct",
+      "target": "Bulk JSON Export Format",
+      "source_files": [
+        "tools/trackit/src/time.rs",
+        "CLAUDE.md"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "implements",
+      "why": "crosses file types (doc \u2194 code); connects across different repos/directories"
+    },
+    {
+      "source": "export_all()",
+      "target": "Bulk JSON Export Format",
+      "source_files": [
+        "tools/trackit/src/time.rs",
+        "CLAUDE.md"
+      ],
+      "confidence": "EXTRACTED",
+      "relation": "implements",
+      "why": "crosses file types (doc \u2194 code); connects across different repos/directories"
+    }
+  ],
+  "tokens": {
+    "input": 251585,
+    "output": 27486
+  }
+}
