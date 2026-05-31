@@ -2,6 +2,12 @@
   "env": {
     "GH_TELEMETRY": "false"
   },
+  "mcpServers": {
+    "sem": {
+      "command": "sem",
+      "args": ["mcp"]
+    }
+  },
   "hooks": {
     "PreToolUse": [
       {

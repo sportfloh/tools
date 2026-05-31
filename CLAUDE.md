@@ -250,3 +250,25 @@ Rules:
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## sem
+
+Semantic version control — understands code at the entity level (functions, structs, modules) via tree-sitter. MCP server is registered in `.claude/settings.json` so Claude Code can call it directly as a tool.
+
+Key commands:
+- `sem diff` / `sem diff HEAD~1` — entity-level diff with rename detection (replaces `git diff` output)
+- `sem entities <file>` — list all extractable entities in a file
+- `sem impact <entity>` — show cross-file dependency graph for an entity
+- `sem blame <file>` — who last modified each function/struct
+- `sem context <entity>` — token-budgeted context (entity + its dependencies + dependents) for LLM prompts
+- `sem log <entity>` — how a single entity evolved through git history
+
+`sem setup` (already run) wires sem as the default `git diff` driver and installs a pre-commit hook that shows the entity-level blast radius of staged changes.
+
+## weave
+
+Semantic merge driver — resolves merge conflicts at the entity level instead of by line numbers. Configured as the Git merge driver via `.gitattributes` (46 language patterns, already committed).
+
+- `weave setup` — (already done) registers `weave-driver` in `.git/config` and populates `.gitattributes`
+- `weave preview <branch>` — dry-run: shows which files weave would auto-resolve vs. those with real conflicts
+- Falls back to standard line-level merging for unsupported formats or large files automatically
