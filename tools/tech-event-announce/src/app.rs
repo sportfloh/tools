@@ -109,7 +109,13 @@ pub fn App() -> impl IntoView {
                     <OutputCard title="Chat" text=chat_text enabled=inputs_complete/>
                     <OutputCard title="EmailBetreff" text=email_subj enabled=inputs_complete/>
                     <OutputCard title="EmailBody" text=email_body enabled=inputs_complete/>
-                    <OutputCard title="Mastodon" text=mastodon_text enabled=inputs_complete char_limit=500_u32/>
+                    <OutputCard
+                        title="Mastodon"
+                        text=mastodon_text
+                        enabled=inputs_complete
+                        char_limit=500_u32
+                        char_count=templates::mastodon_char_count
+                    />
                 </div>
             </main>
         </div>
@@ -122,8 +128,10 @@ fn OutputCard(
     text: Memo<String>,
     enabled: Memo<bool>,
     #[prop(optional)] char_limit: Option<u32>,
+    #[prop(optional)] char_count: Option<fn(&str) -> usize>,
 ) -> impl IntoView {
     let copied = RwSignal::new(false);
+    let count_fn = char_count.unwrap_or(templates::grapheme_count);
 
     let on_copy = move |_| {
         let t = text.get_untracked();
@@ -150,13 +158,13 @@ fn OutputCard(
                     <span class="output-title">{title}</span>
                     {char_limit.map(|limit| view! {
                         <span class=move || {
-                            if text.get().chars().count() > limit as usize {
+                            if count_fn(&text.get()) > limit as usize {
                                 "char-count over-limit"
                             } else {
                                 "char-count"
                             }
                         }>
-                            {move || format!("{}/{}", text.get().chars().count(), limit)}
+                            {move || format!("{}/{}", count_fn(&text.get()), limit)}
                         </span>
                     })}
                 </div>
