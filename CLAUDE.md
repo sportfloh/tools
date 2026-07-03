@@ -37,7 +37,7 @@ cargo test --lib
 cd tools/trackit && wasm-pack test --headless --chrome
 ```
 
-### Current coverage (20 native + 22 WASM tests)
+### Current coverage (31 native + 22 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -61,6 +61,17 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `email_subject_empty_inputs` | native | `templates.rs` (TEA) | empty inputs produce correct empty-slot subject |
 | `email_body_renders_full_template` | native | `templates.rs` (TEA) | greeting, placeholders, sign-off all present |
 | `mastodon_renders_correctly` | native | `templates.rs` (TEA) | date+time inline, topic and description present |
+| `grapheme_count_treats_combining_diacritic_as_one` | native | `templates.rs` (TEA) | decomposed base+combining-mark counts as 1 grapheme, not 2 |
+| `mastodon_char_count_plain_text_matches_naive_count` | native | `templates.rs` (TEA) | plain text with no URL matches expected grapheme count |
+| `mastodon_char_count_single_url_counts_as_23` | native | `templates.rs` (TEA) | a single `https://` URL counts as a flat 23 chars |
+| `mastodon_char_count_multiple_urls_each_counts_as_23` | native | `templates.rs` (TEA) | each URL in a multi-URL string counts as 23 independently |
+| `mastodon_char_count_url_at_start_of_text` | native | `templates.rs` (TEA) | URL detection works when the URL opens the string |
+| `mastodon_char_count_url_at_end_of_text_no_trailing_space` | native | `templates.rs` (TEA) | URL detection works with no trailing whitespace (end-of-string) |
+| `mastodon_char_count_url_glued_to_trailing_punctuation_included_in_span` | native | `templates.rs` (TEA) | punctuation glued to a URL is swallowed into its span (documented simplification) |
+| `mastodon_char_count_long_url_still_counts_as_23` | native | `templates.rs` (TEA) | a 58-char URL still counts as 23, decreasing the total |
+| `mastodon_char_count_no_url_returns_plain_chars_count` | native | `templates.rs` (TEA) | non-ASCII text with no URL matches `grapheme_count` exactly |
+| `mastodon_char_count_combining_diacritic_counts_as_one_grapheme` | native | `templates.rs` (TEA) | decomposed diacritic in surrounding text counts as 1 grapheme |
+| `mastodon_char_count_emoji_with_modifier_counts_as_one_grapheme` | native | `templates.rs` (TEA) | emoji + skin-tone modifier (2 codepoints) counts as 1 grapheme |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
