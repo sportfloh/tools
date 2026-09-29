@@ -27,6 +27,21 @@ The pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt` then `cargo clippy
 git config core.hooksPath .githooks
 ```
 
+### Cloud container setup (Claude Code on the web)
+
+`.claude/hooks/session-start.sh` runs as a SessionStart hook (only when
+`CLAUDE_CODE_REMOTE=true`) and installs everything this file refers to:
+
+- **synchronously** — Rust stable + `wasm32-unknown-unknown` + rustfmt/clippy, cargo-binstall,
+  trunk, wasm-pack, cargo-edit, ast-grep, fd, ripgrep, and a chromedriver matching the
+  preinstalled Playwright Chromium (both linked into `/opt/claude-tools/bin`, which is
+  prepended to `PATH` via `CLAUDE_ENV_FILE`)
+- **in the background** — `sem` and `weave` (no prebuilt binaries; ~10 min source build,
+  log at `/tmp/claude-session-start/sem-weave.log`). When done it configures the
+  `merge.weave` driver in `.git/config` and runs `sem setup`.
+
+It is idempotent: a second run takes well under a second.
+
 ## Tests
 
 ```sh
@@ -135,7 +150,7 @@ Cargo.lock               ← workspace lock file
 rust-toolchain.toml      ← stable + wasm32-unknown-unknown
 .claude/
 ├── settings.json        ← hooks (SessionStart tool install, PostToolUse auto-PR) + sem MCP
-├── hooks/session-start.sh ← installs ast-grep / fd / ripgrep in web sessions
+├── hooks/session-start.sh ← provisions web sessions (toolchain, trunk, wasm-pack, search tools, sem/weave)
 └── auto-pr.sh
 tools/
 └── trackit/             ← served at /tools/trackit/
@@ -166,11 +181,19 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 
 | Crate | Version | Role |
 |-------|---------|------|
-| `leptos` | 0.8 (CSR) | Reactive UI framework |
-| `rexie` | 0.6 | IndexedDB async wrapper |
-| `serde` / `serde_json` | 1.0 | Serialisation |
-| `wasm-bindgen` / `js-sys` / `web-sys` | latest | WASM ↔ JS bridge |
+| `leptos` | 0.8.21 (CSR) | Reactive UI framework (0.9 is still beta — stay on 0.8) |
+| `rexie` | 0.6.2 | IndexedDB async wrapper |
+| `serde` / `serde_json` | 1.0.229 / 1.0.151 | Serialisation |
+| `wasm-bindgen` / `js-sys` / `web-sys` | 0.2.129 / 0.3.106 / 0.3.106 | WASM ↔ JS bridge |
 | `wasm-bindgen-futures` | 0.4 | Await JS Promises from async Rust (used for Geolocation) |
+| `unicode-segmentation` | 1 | Grapheme counting (tech-event-announce) |
+
+Upgrade everything with `cargo upgrade` (cargo-edit; skips pre-releases) followed by
+`cargo update`, then run fmt / clippy / native + WASM tests. GitHub Actions and crates are
+also bumped weekly by Dependabot (`.github/dependabot.yml`).
+
+Tooling versions (installed by the SessionStart hook in web sessions): trunk 0.21.14,
+wasm-pack 0.15, ast-grep 0.45, fd 9, ripgrep 14, sem 0.25, weave 0.5.
 
 Rust edition: **2024**.
 
@@ -279,6 +302,19 @@ Rules:
 - A pattern must parse as a single AST node: `#[attr] fn f() {}` fails because Rust attributes are
   sibling nodes — use `follows`/`precedes` in an inline rule instead (see table).
 - Debian's `fd` package installs the binary as `fdfind`; the hook symlinks it to `fd`.
+
+## Gotchas & Pitfalls
+
+- **chromedriver version mismatch** — the cloud image puts a chromedriver from npm in
+  `/opt/node22/bin` that targets a newer Chrome than the preinstalled Playwright Chromium,
+  and no `google-chrome` is on `PATH`. `wasm-pack test --chrome` then fails with
+  "cannot find Chrome binary" / "only supports Chrome version N". The SessionStart hook
+  fixes both via `/opt/claude-tools/bin`; if `PATH` is missing that dir, pass
+  `--chromedriver /opt/claude-tools/bin/chromedriver`.
+- **trunk via cargo-binstall** falls back to a source build that fails to compile
+  `lightningcss`; the hook downloads the release tarball instead.
+- **`weave setup`** rewrites `.gitattributes` with its full pattern list; only run it when
+  deliberately upgrading weave. The hook only sets the driver in `.git/config`.
 - In Claude Code on the web, `.claude/hooks/session-start.sh` (SessionStart hook) installs
   any of these that are missing. Locally, install via `cargo install ast-grep fd-find ripgrep`
   or your package manager.
@@ -299,7 +335,7 @@ Key commands:
 
 ## weave
 
-Semantic merge driver — resolves merge conflicts at the entity level instead of by line numbers. Configured as the Git merge driver via `.gitattributes` (46 language patterns, already committed).
+Semantic merge driver — resolves merge conflicts at the entity level instead of by line numbers. Configured as the Git merge driver via `.gitattributes` (94 language patterns, already committed).
 
 - `weave setup` — (already done) registers `weave-driver` in `.git/config` and populates `.gitattributes`
 - `weave preview <branch>` — dry-run: shows which files weave would auto-resolve vs. those with real conflicts
