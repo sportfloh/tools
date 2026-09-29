@@ -2,3 +2,4 @@
 /dist/
 tools/*/dist/
 .claude/settings.local.json
+graphify-out/

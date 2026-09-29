@@ -133,6 +133,10 @@ is served at `https://<host>/tools/<name>/`.
 Cargo.toml               ← workspace manifest + shared [profile.release]
 Cargo.lock               ← workspace lock file
 rust-toolchain.toml      ← stable + wasm32-unknown-unknown
+.claude/
+├── settings.json        ← hooks (SessionStart tool install, PostToolUse auto-PR) + sem MCP
+├── hooks/session-start.sh ← installs ast-grep / fd / ripgrep in web sessions
+└── auto-pr.sh
 tools/
 └── trackit/             ← served at /tools/trackit/
     ├── Cargo.toml
@@ -252,15 +256,32 @@ After every major change, update this file to reflect the current state. Specifi
 
 Keep this file as the single source of truth for AI sessions working on this project.
 
-## graphify
+## Code search tools
 
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+Use syntax-aware and fast search tools; never `find` or `grep -r`.
+
+| Need | Tool | Example |
+|------|------|---------|
+| Match code **shape** (calls, fns, impls, attributes) | `ast-grep` | `ast-grep -p 'spawn_local($$$)' -l rust tools/` |
+| List functions returning something | `ast-grep` | `ast-grep -p 'fn $NAME($$$) -> $RET { $$$ }' -l rust tools/` |
+| Find attributes (e.g. all WASM tests) | `ast-grep` | `ast-grep -p '#[wasm_bindgen_test]' -l rust tools/` |
+| Items following an attribute (inline rule) | `ast-grep` | `ast-grep scan --inline-rules '{id: t, language: rust, rule: {kind: function_item, follows: {pattern: "#[wasm_bindgen_test]"}}}' tools/` |
+| Structural rewrite (preview, then `-U` to apply) | `ast-grep` | `ast-grep -p 'old_fn($A)' -r 'new_fn($A)' -l rust tools/` |
+| Plain text / identifiers / comments / non-code files | `rg` | `rg -n 'TopicHeader' tools/`, `rg -t rust 'today_start'` |
+| Find files by name or extension | `fd` | `fd -e rs . tools/`, `fd Cargo.toml` |
 
 Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- Prefer `ast-grep` over `rg` whenever the query is about code structure — it ignores
+  matches in strings/comments and handles multi-line constructs.
+- Use `rg` for free text, config files (TOML, JSON, HTML, CSS) and quick identifier lookups.
+- Use `fd` instead of `find`; it respects `.gitignore` (so `target/` and `dist/` are skipped).
+- Always call ast-grep as `ast-grep`, not `sg` — on Debian/Ubuntu `/usr/bin/sg` is shadow-utils.
+- A pattern must parse as a single AST node: `#[attr] fn f() {}` fails because Rust attributes are
+  sibling nodes — use `follows`/`precedes` in an inline rule instead (see table).
+- Debian's `fd` package installs the binary as `fdfind`; the hook symlinks it to `fd`.
+- In Claude Code on the web, `.claude/hooks/session-start.sh` (SessionStart hook) installs
+  any of these that are missing. Locally, install via `cargo install ast-grep fd-find ripgrep`
+  or your package manager.
 
 ## sem
 
