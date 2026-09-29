@@ -12,11 +12,11 @@ name = "tech-event-announce"
 path = "src/main.rs"
 
 [dependencies]
-leptos = { version = "0.8.19", features = ["csr"] }
-wasm-bindgen = "0.2.114"
-js-sys = "0.3.91"
+leptos = { version = "0.8.21", features = ["csr"] }
+wasm-bindgen = "0.2.129"
+js-sys = "0.3.106"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3.83", features = [
+web-sys = { version = "0.3.106", features = [
     "Window",
     "Navigator",
     "Clipboard",
