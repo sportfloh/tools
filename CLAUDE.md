@@ -302,6 +302,9 @@ Rules:
 - A pattern must parse as a single AST node: `#[attr] fn f() {}` fails because Rust attributes are
   sibling nodes — use `follows`/`precedes` in an inline rule instead (see table).
 - Debian's `fd` package installs the binary as `fdfind`; the hook symlinks it to `fd`.
+- In Claude Code on the web, `.claude/hooks/session-start.sh` (SessionStart hook) installs
+  any of these that are missing. Locally, install via `cargo install ast-grep fd-find ripgrep`
+  or your package manager.
 
 ## Gotchas & Pitfalls
 
@@ -315,9 +318,6 @@ Rules:
   `lightningcss`; the hook downloads the release tarball instead.
 - **`weave setup`** rewrites `.gitattributes` with its full pattern list; only run it when
   deliberately upgrading weave. The hook only sets the driver in `.git/config`.
-- In Claude Code on the web, `.claude/hooks/session-start.sh` (SessionStart hook) installs
-  any of these that are missing. Locally, install via `cargo install ast-grep fd-find ripgrep`
-  or your package manager.
 
 ## sem
 
