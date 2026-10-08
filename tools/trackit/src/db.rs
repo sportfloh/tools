@@ -17,6 +17,10 @@ pub struct TopicHeader {
     pub count_today: u32,
     pub count_week: u32,
     pub count_month: u32,
+    /// Sort key for the topic list (edit mode ▲/▼). Records written before
+    /// this field existed load as 0; ties are ordered by name.
+    #[serde(default)]
+    pub position: u32,
 }
 
 impl TopicHeader {
@@ -29,6 +33,7 @@ impl TopicHeader {
             count_today: 0,
             count_week: 0,
             count_month: 0,
+            position: 0,
         }
     }
 
@@ -113,10 +118,12 @@ pub(crate) async fn load_topic_headers(db: &Rexie) -> Vec<TopicHeader> {
     };
     let records = store.get_all(None, None).await.unwrap_or_default();
     tx.done().await.ok();
-    records
+    let mut headers: Vec<TopicHeader> = records
         .into_iter()
         .filter_map(|v| serde_wasm_bindgen::from_value::<TopicHeader>(v).ok())
-        .collect()
+        .collect();
+    crate::time::sort_topics(&mut headers);
+    headers
 }
 
 pub(crate) async fn save_topic_header(db: &Rexie, h: &TopicHeader) {
@@ -162,6 +169,27 @@ pub(crate) async fn load_events_for_topic(db: &Rexie, topic_id: &str) -> Vec<Eve
     rows
 }
 
+/// Save several headers (e.g. after reordering) in one transaction.
+pub(crate) async fn save_topic_headers_idb(db: &Rexie, headers: &[TopicHeader]) -> bool {
+    let tx = match db.transaction(&["topics"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let store = match tx.store("topics") {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    for h in headers {
+        let Ok(val) = serde_wasm_bindgen::to_value(h) else {
+            return false;
+        };
+        if store.put(&val, None).await.is_err() {
+            return false;
+        }
+    }
+    tx.done().await.is_ok()
+}
+
 pub(crate) async fn refresh_topic_counts_idb(db: &Rexie, header: &TopicHeader) -> TopicHeader {
     let events = load_events_for_topic(db, &header.id).await;
     let mut updated = header.clone();
@@ -173,6 +201,8 @@ pub(crate) async fn refresh_topic_counts_idb(db: &Rexie, header: &TopicHeader) -
     updated
 }
 
+/// Single-event put; production code uses the atomic / bulk variants.
+#[cfg(test)]
 pub(crate) async fn add_event_idb(db: &Rexie, row: &EventRow) {
     let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
         Ok(t) => t,
@@ -186,6 +216,28 @@ pub(crate) async fn add_event_idb(db: &Rexie, row: &EventRow) {
         store.put(&val, None).await.ok();
     }
     tx.done().await.ok();
+}
+
+/// Write all `rows` in one readwrite transaction: either every row is stored
+/// or (on failure) none is. Returns whether the transaction committed.
+pub(crate) async fn add_events_bulk_idb(db: &Rexie, rows: &[EventRow]) -> bool {
+    let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let store = match tx.store("events") {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    for row in rows {
+        let Ok(val) = serde_wasm_bindgen::to_value(row) else {
+            return false;
+        };
+        if store.put(&val, None).await.is_err() {
+            return false;
+        }
+    }
+    tx.done().await.is_ok()
 }
 
 /// Overwrite `row` (e.g. with a GPS fix) only if an event with its id is
@@ -242,17 +294,20 @@ pub(crate) async fn add_event_and_update_header_idb(
     tx.done().await.is_ok()
 }
 
-pub(crate) async fn delete_event_idb(db: &Rexie, event_id: &str) {
+/// Delete one event. Returns whether the transaction committed.
+pub(crate) async fn delete_event_idb(db: &Rexie, event_id: &str) -> bool {
     let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
         Ok(t) => t,
-        Err(_) => return,
+        Err(_) => return false,
     };
     let store = match tx.store("events") {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => return false,
     };
-    store.delete(JsValue::from_str(event_id)).await.ok();
-    tx.done().await.ok();
+    if store.delete(JsValue::from_str(event_id)).await.is_err() {
+        return false;
+    }
+    tx.done().await.is_ok()
 }
 
 pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
@@ -285,9 +340,10 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
-        delete_topic_idb, enrich_event_idb, load_events_for_topic, load_topic_headers, open_db,
-        open_db_named, refresh_topic_counts_idb, save_topic_header,
+        EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, add_events_bulk_idb,
+        delete_event_idb, delete_topic_idb, enrich_event_idb, load_events_for_topic,
+        load_topic_headers, open_db, open_db_named, refresh_topic_counts_idb, save_topic_header,
+        save_topic_headers_idb,
     };
     use wasm_bindgen_test::*;
 
@@ -301,6 +357,7 @@ mod wasm_tests {
             count_today: 0,
             count_week: 0,
             count_month: 0,
+            position: 0,
         }
     }
 
@@ -418,6 +475,7 @@ mod wasm_tests {
             count_today: 0,
             count_week: 0,
             count_month: 0,
+            position: 0,
         };
         save_topic_header(&db, &hdr).await;
 
@@ -460,6 +518,7 @@ mod wasm_tests {
             count_today: 999,
             count_week: 999,
             count_month: 999,
+            position: 0,
         };
         save_topic_header(&db, &stale).await;
 
@@ -546,5 +605,65 @@ mod wasm_tests {
             .expect("first open succeeds")
             .close();
         assert!(open_db_named("trackit-test-version", 1).await.is_err());
+    }
+
+    // IDB: bulk insert stores every row in one go
+    #[wasm_bindgen_test]
+    async fn idb_add_events_bulk_writes_all() {
+        let db = open_db().await.unwrap();
+        let rows: Vec<EventRow> = (0..50)
+            .map(|i| test_event(&format!("ev-bulk-{i}"), "topic-bulk-1", i as f64))
+            .collect();
+        assert!(
+            add_events_bulk_idb(&db, &rows).await,
+            "transaction should commit"
+        );
+        let events = load_events_for_topic(&db, "topic-bulk-1").await;
+        assert_eq!(events.len(), 50);
+    }
+
+    // IDB: bulk insert of nothing is a successful no-op
+    #[wasm_bindgen_test]
+    async fn idb_add_events_bulk_empty_is_ok() {
+        let db = open_db().await.unwrap();
+        assert!(add_events_bulk_idb(&db, &[]).await);
+    }
+
+    // IDB: positions saved in one batch come back in that order
+    #[wasm_bindgen_test]
+    async fn idb_save_topic_headers_persists_positions() {
+        let db = open_db_named("trackit-test-order", 1).await.unwrap();
+        let mut headers = vec![
+            TopicHeader {
+                position: 2,
+                ..test_header("o-1", "A")
+            },
+            TopicHeader {
+                position: 0,
+                ..test_header("o-2", "B")
+            },
+            TopicHeader {
+                position: 1,
+                ..test_header("o-3", "C")
+            },
+        ];
+        assert!(save_topic_headers_idb(&db, &headers).await);
+        let loaded: Vec<String> = load_topic_headers(&db)
+            .await
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        assert_eq!(loaded, ["o-2", "o-3", "o-1"]);
+
+        // Moving again overwrites the stored positions.
+        headers[0].position = 0;
+        headers[1].position = 1;
+        assert!(save_topic_headers_idb(&db, &headers[..2]).await);
+        let loaded: Vec<String> = load_topic_headers(&db)
+            .await
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        assert_eq!(loaded, ["o-1", "o-2", "o-3"]);
     }
 }

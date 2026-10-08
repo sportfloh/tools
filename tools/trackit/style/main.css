@@ -34,6 +34,25 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ── Accessibility helpers ───────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+/* Hidden visually but still focusable (file inputs inside header labels) */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.header-btn-import:focus-within {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
 /* ── App shell & navigation screens ──────────────────────────────────────── */
 /*
  * position:fixed takes the app out of document flow entirely — there is
@@ -150,7 +169,7 @@ html, body {
 
 .header-btn-left   { justify-content: flex-start; }
 .header-btn-right  { justify-content: flex-end; font-size: 1.5rem; font-weight: 300; }
-.header-btn-import { cursor: pointer; font-size: 1.1rem; min-width: 44px; }
+.header-btn-import { position: relative; cursor: pointer; font-size: 1.1rem; min-width: 44px; }
 .header-btn-back   { justify-content: flex-start; font-size: 1.0625rem; }
 
 .header-right {
@@ -267,11 +286,16 @@ html, body {
   gap: 8px;
 }
 
-/* Tappable area — tracks an event on press */
+/* Tappable area — tracks an event on press (a <button>, reset to look plain) */
 .topic-row-main {
   flex: 1;
   min-width: 0;
   padding: 12px 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -296,6 +320,35 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
   font-variant-numeric: tabular-nums;
+}
+
+/* ▲/▼ reorder buttons (edit mode) */
+.reorder-buttons {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-right: 4px;
+}
+.btn-reorder {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-primary);
+  font-size: .8rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-reorder:disabled {
+  color: var(--color-border);
+  cursor: default;
+}
+
+/* Inline rename field (edit mode) */
+.topic-rename-input {
+  margin: 10px 0;
+  font-weight: 600;
 }
 
 /* iOS-style disclosure chevron */
@@ -337,6 +390,24 @@ html, body {
 }
 .btn-delete-topic:active { transform: scale(.88); }
 
+/* Confirm button revealed by tapping the red circle */
+.btn-confirm-delete {
+  align-self: stretch;
+  margin: 8px 4px 8px 0;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-danger);
+  color: white;
+  font-size: .875rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  animation: pop-in .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-confirm-delete:active { background: var(--color-danger-dark); }
+
 @keyframes pop-in {
   from { transform: scale(0); }
   to   { transform: scale(1); }
@@ -368,8 +439,13 @@ html, body {
 }
 .event-item:last-child { border-bottom: none; }
 
-/* Slides left to reveal the delete button on swipe */
+/* Slides left to reveal the delete button on swipe (a <button>, reset) */
 .event-item-content {
+  width: 100%;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -413,6 +489,8 @@ html, body {
 @media (hover: hover) {
   .event-item:hover .btn-delete-swipe { transform: translateX(0); }
 }
+/* Keyboard users reach the delete button by tabbing to it */
+.btn-delete-swipe:focus-visible { transform: translateX(0); }
 
 .event-empty {
   padding: 24px 16px;
@@ -662,3 +740,48 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 .event-item-content:active { opacity: .6; }
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+.toast-region {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+  z-index: 100;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  padding: 10px 10px 10px 16px;
+  border-radius: 22px;
+  background: #1c1c1e;
+  color: #fff;
+  font-size: .9rem;
+  box-shadow: var(--shadow-hover);
+  animation: toast-in .2s var(--nav-ease);
+}
+.toast-message {
+  overflow-wrap: anywhere;
+}
+.toast-undo {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .14);
+  color: #8ec1ff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}

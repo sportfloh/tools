@@ -2,7 +2,14 @@ use leptos::prelude::*;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
-use crate::templates;
+use crate::{storage, templates};
+
+// localStorage keys for the draft (the date is not stored: it always
+// defaults to the next Saturday, so a stale date cannot come back).
+const KEY_TOPIC: &str = "tea.topic";
+const KEY_DESCR: &str = "tea.descr";
+const KEY_TIME: &str = "tea.time";
+const KEY_SIGNATURE: &str = "tea.signature";
 
 /// Returns the date of the next Saturday (from today) as `DD.MM.YYYY`.
 /// If today is Saturday, returns next week's Saturday.
@@ -27,32 +34,56 @@ fn next_saturday_str() -> String {
 pub fn App() -> impl IntoView {
     // Date is stored and displayed directly as DD.MM.YYYY — no conversion layer.
     let date = RwSignal::new(next_saturday_str());
-    let topic = RwSignal::new(String::new());
-    let descr = RwSignal::new(String::new());
+    // Settings as typed (persisted); an emptied field falls back to the default.
+    let time_input = RwSignal::new(storage::load(KEY_TIME).unwrap_or_default());
+    let signature_input = RwSignal::new(storage::load(KEY_SIGNATURE).unwrap_or_default());
+    Effect::new(move |_| storage::save(KEY_TIME, &time_input.get()));
+    Effect::new(move |_| storage::save(KEY_SIGNATURE, &signature_input.get()));
+    let settings = Memo::new(move |_| {
+        let defaults = templates::Settings::default();
+        let or_default = |v: String, d: String| {
+            let v = v.trim();
+            if v.is_empty() { d } else { v.to_string() }
+        };
+        templates::Settings {
+            time: or_default(time_input.get(), defaults.time),
+            signature: or_default(signature_input.get(), defaults.signature),
+        }
+    });
+    let topic = RwSignal::new(storage::load(KEY_TOPIC).unwrap_or_default());
+    let descr = RwSignal::new(storage::load(KEY_DESCR).unwrap_or_default());
+    Effect::new(move |_| storage::save(KEY_TOPIC, &topic.get()));
+    Effect::new(move |_| storage::save(KEY_DESCR, &descr.get()));
+    let clear_draft = move |_| {
+        topic.set(String::new());
+        descr.set(String::new());
+    };
 
     let chat_text = Memo::new(move |_| {
         let d = date.get();
         let t = topic.get();
         let de = descr.get();
-        templates::chat(d.trim(), t.trim(), de.trim())
+        templates::chat(d.trim(), t.trim(), de.trim(), &settings.get())
     });
     let email_subj = Memo::new(move |_| {
         let d = date.get();
         let t = topic.get();
-        templates::email_subject(d.trim(), t.trim())
+        templates::email_subject(d.trim(), t.trim(), &settings.get())
     });
     let email_body = Memo::new(move |_| {
         let d = date.get();
         let t = topic.get();
         let de = descr.get();
-        templates::email_body(d.trim(), t.trim(), de.trim())
+        templates::email_body(d.trim(), t.trim(), de.trim(), &settings.get())
     });
     let mastodon_text = Memo::new(move |_| {
         let d = date.get();
         let t = topic.get();
         let de = descr.get();
-        templates::mastodon(d.trim(), t.trim(), de.trim())
+        templates::mastodon(d.trim(), t.trim(), de.trim(), &settings.get())
     });
+
+    let mail_href = Memo::new(move |_| templates::mailto_url(&email_subj.get(), &email_body.get()));
 
     let inputs_complete = Memo::new(move |_| {
         !date.get().trim().is_empty()
@@ -79,7 +110,11 @@ pub fn App() -> impl IntoView {
                             placeholder="dd.mm.yyyy"
                             prop:value=date
                             on:input=move |ev| date.set(event_target_value(&ev))
+                            aria-describedby="date-hint"
                         />
+                        <p id="date-hint" class="form-hint" aria-live="polite">
+                            {move || templates::date_warning(&date.get())}
+                        </p>
                     </div>
                     <div class="form-field">
                         <label class="form-label" for="inp-topic">"Thema"</label>
@@ -102,19 +137,60 @@ pub fn App() -> impl IntoView {
                             on:input=move |ev| descr.set(event_target_value(&ev))
                         />
                     </div>
+                    <details class="settings">
+                        <summary>"Einstellungen"</summary>
+                        <div class="form-field">
+                            <label class="form-label" for="inp-time">"Uhrzeit"</label>
+                            <input
+                                id="inp-time"
+                                type="text"
+                                class="form-input"
+                                placeholder=templates::Settings::default().time
+                                prop:value=time_input
+                                on:input=move |ev| time_input.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="form-field">
+                            <label class="form-label" for="inp-signature">"Signatur (E-Mail)"</label>
+                            <input
+                                id="inp-signature"
+                                type="text"
+                                class="form-input"
+                                placeholder=templates::Settings::default().signature
+                                prop:value=signature_input
+                                on:input=move |ev| signature_input.set(event_target_value(&ev))
+                            />
+                        </div>
+                    </details>
+                    <div class="form-actions">
+                        <button
+                            class="btn-clear"
+                            type="button"
+                            on:click=clear_draft
+                            disabled=move || topic.with(String::is_empty) && descr.with(String::is_empty)
+                        >
+                            "Leeren"
+                        </button>
+                    </div>
                 </section>
 
                 // ── Right column: outputs ────────────────────────────────────
                 <div class="outputs-col">
-                    <OutputCard title="Chat" text=chat_text enabled=inputs_complete/>
-                    <OutputCard title="EmailBetreff" text=email_subj enabled=inputs_complete/>
-                    <OutputCard title="EmailBody" text=email_body enabled=inputs_complete/>
+                    <OutputCard title="Chat" text=chat_text enabled=inputs_complete shareable=true/>
+                    <OutputCard title="E-Mail-Betreff" text=email_subj enabled=inputs_complete/>
+                    <OutputCard
+                        title="E-Mail-Text"
+                        text=email_body
+                        enabled=inputs_complete
+                        mail_href=mail_href
+                    />
                     <OutputCard
                         title="Mastodon"
                         text=mastodon_text
                         enabled=inputs_complete
                         char_limit=500_u32
                         char_count=templates::mastodon_char_count
+                        shareable=true
                     />
                 </div>
             </main>
@@ -144,6 +220,14 @@ async fn write_clipboard(text: &str) -> bool {
             .is_ok()
 }
 
+/// Whether the browser offers the Web Share API (`navigator.share`).
+fn share_supported() -> bool {
+    web_sys::window().is_some_and(|w| {
+        js_sys::Reflect::get(&w.navigator(), &JsValue::from_str("share"))
+            .is_ok_and(|f| f.is_function())
+    })
+}
+
 #[component]
 fn OutputCard(
     title: &'static str,
@@ -151,7 +235,25 @@ fn OutputCard(
     enabled: Memo<bool>,
     #[prop(optional)] char_limit: Option<u32>,
     #[prop(optional)] char_count: Option<fn(&str) -> usize>,
+    /// Adds an "E-Mail öffnen" link with this `mailto:` URL.
+    #[prop(optional)]
+    mail_href: Option<Memo<String>>,
+    /// Adds a "Teilen" button (Web Share API) where the browser supports it.
+    #[prop(optional)]
+    shareable: bool,
 ) -> impl IntoView {
+    let can_share = shareable && share_supported();
+    let on_share = move |_| {
+        let t = text.get_untracked();
+        spawn_local(async move {
+            if let Some(window) = web_sys::window() {
+                let data = web_sys::ShareData::new();
+                data.set_text(&t);
+                // Rejects when the user cancels the share sheet; nothing to do.
+                let _ = JsFuture::from(window.navigator().share_with_data(&data)).await;
+            }
+        });
+    };
     let copy_state = RwSignal::new(CopyState::Idle);
     let count_fn = char_count.unwrap_or(templates::grapheme_count);
 
@@ -192,6 +294,27 @@ fn OutputCard(
                         </span>
                     })}
                 </div>
+                <div class="output-actions">
+                {mail_href.map(|href| view! {
+                    <a
+                        class="btn-copy btn-link"
+                        class:disabled=move || !enabled.get()
+                        href=move || enabled.get().then(|| href.get())
+                        aria-disabled=move || (!enabled.get()).to_string()
+                    >
+                        "E-Mail öffnen"
+                    </a>
+                })}
+                {can_share.then(|| view! {
+                    <button
+                        class="btn-copy"
+                        type="button"
+                        disabled=move || !enabled.get()
+                        on:click=on_share
+                    >
+                        "Teilen"
+                    </button>
+                })}
                 <button
                     class=move || match copy_state.get() {
                         CopyState::Idle => "btn-copy",
@@ -207,6 +330,7 @@ fn OutputCard(
                         CopyState::Failed => "Fehler",
                     }}
                 </button>
+                </div>
             </div>
             <textarea
                 class="output-text"

@@ -20,6 +20,8 @@ web-sys = { version = "0.3.106", features = [
     "Window",
     "Navigator",
     "Clipboard",
+    "Storage",
+    "ShareData",
     "HtmlInputElement",
     "HtmlTextAreaElement",
 ] }

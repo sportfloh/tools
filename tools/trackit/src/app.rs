@@ -1,11 +1,13 @@
 use crate::db::{
-    DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
-    delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic, load_topic_headers, open_db,
-    refresh_topic_counts_idb, save_topic_header,
+    DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_events_bulk_idb,
+    delete_event_idb, delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic,
+    load_topic_headers, open_db, refresh_topic_counts_idb, save_topic_header,
+    save_topic_headers_idb,
 };
 use crate::time::{
-    event_row_counts, export_all, export_topic, format_timestamp, new_id, now_local_datetime_str,
-    now_timestamp, parse_bulk_import, parse_import_line, time_boundaries, with_added_event,
+    Direction, NameError, event_row_counts, export_all, export_topic, format_timestamp,
+    merge_new_events, move_item, new_id, now_local_datetime_str, now_timestamp, parse_bulk_import,
+    parse_import_line, time_boundaries, validate_topic_name, with_added_event,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -122,10 +124,117 @@ pub(crate) struct Editing(pub(crate) RwSignal<bool>);
 pub(crate) struct ShowDetail(pub(crate) RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct ShowEventDetail(pub(crate) RwSignal<bool>);
+/// Id of the topic whose "−" was tapped and now shows a "Delete" confirm button.
+#[derive(Clone, Copy)]
+pub(crate) struct PendingDelete(pub(crate) RwSignal<Option<String>>);
 
 // Per-topic reactive signal list. Outer signal changes only on add/remove;
 // inner RwSignal<TopicHeader> changes only when that topic's counts change.
 pub(crate) type TopicList = RwSignal<Vec<RwSignal<TopicHeader>>>;
+
+// ─── Toasts ───────────────────────────────────────────────────────────────────
+
+const TOAST_DURATION: std::time::Duration = std::time::Duration::from_millis(4000);
+
+/// A short message shown at the bottom of the screen, optionally with Undo.
+/// The undo action is a plain `Arc<dyn Fn>` rather than a Leptos `Callback`,
+/// which would be owned by (and disposed with) the scope that created it.
+#[derive(Clone)]
+pub(crate) struct Toast {
+    pub message: String,
+    pub undo: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// Copyable handle (provided via context) for showing toasts. A newer toast
+/// replaces the current one; the generation counter keeps an older timer
+/// from hiding it early.
+#[derive(Clone, Copy)]
+pub(crate) struct Toasts {
+    current: RwSignal<Option<Toast>>,
+    generation: StoredValue<u64>,
+}
+
+impl Toasts {
+    fn new() -> Self {
+        Toasts {
+            current: RwSignal::new(None),
+            generation: StoredValue::new(0),
+        }
+    }
+
+    pub(crate) fn show(self, message: impl Into<String>) {
+        self.push(Toast {
+            message: message.into(),
+            undo: None,
+        });
+    }
+
+    pub(crate) fn show_with_undo(
+        self,
+        message: impl Into<String>,
+        undo: impl Fn() + Send + Sync + 'static,
+    ) {
+        self.push(Toast {
+            message: message.into(),
+            undo: Some(std::sync::Arc::new(undo)),
+        });
+    }
+
+    fn push(self, toast: Toast) {
+        let generation = self.generation.get_value() + 1;
+        self.generation.set_value(generation);
+        self.current.set(Some(toast));
+        set_timeout(
+            move || {
+                if self.generation.get_value() == generation {
+                    self.current.set(None);
+                }
+            },
+            TOAST_DURATION,
+        );
+    }
+
+    fn dismiss(self) {
+        self.current.set(None);
+    }
+}
+
+#[component]
+pub fn ToastBar() -> impl IntoView {
+    let toasts = use_context::<Toasts>().expect("toasts context");
+    let message = move || {
+        toasts
+            .current
+            .with(|t| t.as_ref().map(|t| t.message.clone()).unwrap_or_default())
+    };
+    let undo = move || {
+        toasts
+            .current
+            .with(|t| t.as_ref().and_then(|t| t.undo.clone()))
+    };
+    view! {
+        // Always rendered so screen readers pick up changes in the live region.
+        <div class="toast-region" role="status" aria-live="polite">
+            <Show when=move || toasts.current.with(Option::is_some)>
+                <div class="toast">
+                    <span class="toast-message">{message}</span>
+                    {move || undo().map(|undo| view! {
+                        <button
+                            class="toast-undo"
+                            type="button"
+                            on:click=move |_| {
+                                toasts.dismiss();
+                                undo();
+                            }
+                        >
+                            "Undo"
+                        </button>
+                    })}
+                </div>
+            </Show>
+        </div>
+    }
+}
 
 // ─── Components ──────────────────────────────────────────────────────────────
 
@@ -135,8 +244,54 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     let editing = use_context::<Editing>().expect("editing context").0;
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
+    let toasts = use_context::<Toasts>().expect("toasts context");
+    let pending_delete = use_context::<PendingDelete>()
+        .expect("pending_delete context")
+        .0;
+    let is_pending_delete =
+        move || pending_delete.with(|p| p.as_deref() == Some(&topic_signal.with(|h| h.id.clone())));
+
+    // Draft name while renaming inline (edit mode only).
+    let renaming: RwSignal<Option<String>> = RwSignal::new(None);
+    let rename_input = NodeRef::<leptos::html::Input>::new();
+    Effect::new(move |_| {
+        if let Some(input) = rename_input.get() {
+            let _ = input.focus();
+            input.select();
+        }
+    });
+    let commit_rename = move || {
+        let Some(draft) = renaming.get_untracked() else {
+            return;
+        };
+        renaming.set(None);
+        let (id, current) = topic_signal.with_untracked(|h| (h.id.clone(), h.name.clone()));
+        match validate_topic_name(&draft, &other_topic_names(topic_list, &id)) {
+            Ok(name) if name == current => {}
+            Ok(name) => {
+                topic_signal.update(|h| h.name = name.clone());
+                if let Some(db) = get_db() {
+                    let header = topic_signal.get_untracked();
+                    spawn_local(async move {
+                        save_topic_header(&db, &header).await;
+                    });
+                }
+                toasts.show(format!("Renamed to “{name}” – update ?add= shortcuts"));
+            }
+            Err(e) => toasts.show(e.message()),
+        }
+    };
 
     let add_event = move |_| {
+        if editing.get_untracked() {
+            // Edit mode never logs: a tap cancels a pending delete or renames.
+            if pending_delete.with_untracked(Option::is_some) {
+                pending_delete.set(None);
+            } else {
+                renaming.set(Some(topic_signal.with_untracked(|h| h.name.clone())));
+            }
+            return;
+        }
         let Some(db) = get_db() else { return };
         let row = EventRow {
             id: new_id(),
@@ -146,12 +301,44 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
             ..Default::default()
         };
         spawn_local(async move {
-            record_event(&db, row, topic_signal, |_| {}, |_| {}).await;
+            record_event(
+                &db,
+                row,
+                topic_signal,
+                |row| {
+                    let event_id = row.id.clone();
+                    let name = topic_signal.with_untracked(|h| h.name.clone());
+                    toasts.show_with_undo(format!("Logged in {name}"), move || {
+                        let event_id = event_id.clone();
+                        spawn_local(async move {
+                            if let Some(db) = get_db() {
+                                undo_logged_event(&db, &event_id, topic_signal).await;
+                            }
+                        });
+                    });
+                },
+                |_| {},
+            )
+            .await;
+        });
+    };
+
+    // "−" only arms the delete; the revealed "Delete" button performs it.
+    let arm_delete = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        let id = topic_signal.with_untracked(|h| h.id.clone());
+        pending_delete.update(|p| {
+            *p = if p.as_deref() == Some(&id) {
+                None
+            } else {
+                Some(id)
+            }
         });
     };
 
     let delete_topic = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
+        pending_delete.set(None);
         let id = topic_signal.with_untracked(|h| h.id.clone());
         let id2 = id.clone();
         if let Some(db) = get_db() {
@@ -160,6 +347,45 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
             });
         }
         topic_list.update(|rows| rows.retain(|s| s.with_untracked(|h| h.id != id2)));
+    };
+
+    // ▲/▼ in edit mode: swap with the neighbour, then persist every position
+    // so legacy records (all position 0) get a stable order too.
+    let move_topic = move |dir: Direction| {
+        let id = topic_signal.with_untracked(|h| h.id.clone());
+        let mut moved = false;
+        topic_list.update(|rows| {
+            if let Some(idx) = rows.iter().position(|s| s.with_untracked(|h| h.id == id)) {
+                moved = move_item(rows, idx, dir);
+            }
+        });
+        if !moved {
+            return;
+        }
+        let headers: Vec<TopicHeader> = topic_list.with_untracked(|rows| {
+            rows.iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let i = i as u32;
+                    if s.with_untracked(|h| h.position != i) {
+                        s.update(|h| h.position = i);
+                    }
+                    s.get_untracked()
+                })
+                .collect()
+        });
+        if let Some(db) = get_db() {
+            spawn_local(async move {
+                save_topic_headers_idb(&db, &headers).await;
+            });
+        }
+    };
+    let is_at = move |first: bool| {
+        let id = topic_signal.with(|h| h.id.clone());
+        topic_list.with(|rows| {
+            let end = if first { rows.first() } else { rows.last() };
+            end.is_some_and(|s| s.with_untracked(|h| h.id == id))
+        })
     };
 
     let go_detail = move |ev: leptos::ev::MouseEvent| {
@@ -177,20 +403,103 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     view! {
         <div class="topic-row">
             <Show when=move || editing.get()>
-                <button class="btn-delete-topic" on:click=delete_topic title="Delete topic">
+                <button
+                    class="btn-delete-topic"
+                    type="button"
+                    on:click=arm_delete
+                    title="Delete topic"
+                    aria-label=move || format!("Delete topic {}", topic_name.get())
+                >
                     "−"
                 </button>
             </Show>
-            <div class="topic-row-main" on:click=add_event>
-                <span class="topic-row-name">{topic_name}</span>
-                <span class="topic-row-counts">
-                    {move || {
-                        let (today, week, month, total) = counts.get();
-                        format!("{} today · {} wk · {} mo · {} total", today, week, month, total)
-                    }}
-                </span>
-            </div>
-            <button class="btn-detail" on:click=go_detail title="Details">"›"</button>
+            <Show
+                when=move || editing.get() && renaming.with(Option::is_some)
+                fallback=move || view! {
+                    <button
+                        class="topic-row-main"
+                        type="button"
+                        on:click=add_event
+                        aria-label=move || {
+                            let verb = if editing.get() { "Rename" } else { "Log event for" };
+                            format!("{verb} {}", topic_name.get())
+                        }
+                    >
+                        <span class="topic-row-name">{topic_name}</span>
+                        <span class="topic-row-counts">
+                            {move || {
+                                let (today, week, month, total) = counts.get();
+                                format!("{} today · {} wk · {} mo · {} total", today, week, month, total)
+                            }}
+                        </span>
+                    </button>
+                }
+            >
+                <input
+                    class="topic-input topic-rename-input"
+                    type="text"
+                    node_ref=rename_input
+                    aria-label="Topic name"
+                    prop:value=move || renaming.get().unwrap_or_default()
+                    on:input=move |e| renaming.set(Some(event_target_value(&e)))
+                    on:keydown=move |e: leptos::ev::KeyboardEvent| match e.key().as_str() {
+                        "Enter" => commit_rename(),
+                        "Escape" => renaming.set(None),
+                        _ => {}
+                    }
+                    on:blur=move |_| commit_rename()
+                />
+            </Show>
+            <Show
+                when=is_pending_delete
+                fallback=move || if editing.get() {
+                    view! {
+                        <div class="reorder-buttons">
+                            <button
+                                class="btn-reorder"
+                                type="button"
+                                disabled=move || is_at(true)
+                                on:click=move |_| move_topic(Direction::Up)
+                                aria-label=move || format!("Move {} up", topic_name.get())
+                            >
+                                "▲"
+                            </button>
+                            <button
+                                class="btn-reorder"
+                                type="button"
+                                disabled=move || is_at(false)
+                                on:click=move |_| move_topic(Direction::Down)
+                                aria-label=move || format!("Move {} down", topic_name.get())
+                            >
+                                "▼"
+                            </button>
+                        </div>
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <button
+                            class="btn-detail"
+                            type="button"
+                            on:click=go_detail
+                            title="Details"
+                            aria-label=move || format!("Details for {}", topic_name.get())
+                        >
+                            "›"
+                        </button>
+                    }
+                    .into_any()
+                }
+            >
+                <button
+                    class="btn-confirm-delete"
+                    type="button"
+                    on:click=delete_topic
+                    aria-label=move || format!("Confirm deleting {}", topic_name.get())
+                >
+                    "Delete"
+                </button>
+            </Show>
         </div>
     }
 }
@@ -205,6 +514,7 @@ pub fn TopicDetail() -> impl IntoView {
         .0;
     let event_detail_ev =
         use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
+    let toasts = use_context::<Toasts>().expect("toasts context");
 
     let show_add_modal: RwSignal<bool> = RwSignal::new(false);
     let manual_dt: RwSignal<String> = RwSignal::new(String::new());
@@ -299,6 +609,18 @@ pub fn TopicDetail() -> impl IntoView {
                     |row| {
                         events.update(|evs| evs.insert(0, row.clone()));
                         all_evs.update_value(|v| v.insert(0, row.clone()));
+                        let event_id = row.id.clone();
+                        let name = sig.with_untracked(|h| h.name.clone());
+                        toasts.show_with_undo(format!("Logged in {name}"), move || {
+                            let event_id = event_id.clone();
+                            events.update(|evs| evs.retain(|e| e.id != event_id));
+                            all_evs.update_value(|v| v.retain(|e| e.id != event_id));
+                            spawn_local(async move {
+                                if let Some(db) = get_db() {
+                                    undo_logged_event(&db, &event_id, sig).await;
+                                }
+                            });
+                        });
                     },
                     |row| {
                         let replace = |v: &mut Vec<EventRow>| {
@@ -352,8 +674,8 @@ pub fn TopicDetail() -> impl IntoView {
                     <button class="header-btn header-btn-back" on:click=go_back>"‹ Back"</button>
                     <h1>{topic_name}</h1>
                     <div class="header-right">
-                        <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">"↓"</button>
-                        <button class="header-btn header-btn-right" on:click=open_add_modal title="Log event manually">"+"</button>
+                        <button class="header-btn header-btn-right" type="button" on:click=do_export title="Export to .txt" aria-label="Export topic as text file">"↓"</button>
+                        <button class="header-btn header-btn-right" type="button" on:click=open_add_modal title="Log event manually" aria-label="Log event manually">"+"</button>
                     </div>
                 </div>
             </header>
@@ -436,10 +758,10 @@ pub fn TopicDetail() -> impl IntoView {
                                         on:touchstart=on_touch_start_row
                                         on:touchend=on_touch_end_row
                                     >
-                                        <div class="event-item-content" on:click=open_event_detail>
-                                            <span class="event-icon">"🕐"</span>
+                                        <button class="event-item-content" type="button" on:click=open_event_detail>
+                                            <span class="event-icon" aria-hidden="true">"🕐"</span>
                                             <span class="event-time">{format_timestamp(&ts_str)}</span>
-                                        </div>
+                                        </button>
                                         <button
                                             class="btn-delete-swipe"
                                             on:click=delete_event
@@ -610,6 +932,41 @@ fn parse_add_param_raw(search: &str) -> Option<&str> {
     None
 }
 
+/// Undo a just-logged event: delete it and recompute the topic's counts from
+/// what is left. Returns whether the event was deleted. A GPS fix that
+/// arrives afterwards is dropped by `enrich_event_idb`.
+pub(crate) async fn undo_logged_event(
+    db: &Rexie,
+    event_id: &str,
+    header: RwSignal<TopicHeader>,
+) -> bool {
+    if !delete_event_idb(db, event_id).await {
+        return false;
+    }
+    let fresh = refresh_topic_counts_idb(db, &header.get_untracked()).await;
+    header.set(fresh);
+    true
+}
+
+/// Names of all topics except the one with id `except` (pass "" for none).
+fn other_topic_names(topic_list: TopicList, except: &str) -> Vec<String> {
+    topic_list.with_untracked(|rows| {
+        rows.iter()
+            .filter_map(|s| s.with_untracked(|h| (h.id != except).then(|| h.name.clone())))
+            .collect()
+    })
+}
+
+/// Position for a newly created topic: after all existing ones.
+fn next_position(topic_list: TopicList) -> u32 {
+    topic_list.with_untracked(|rows| {
+        rows.iter()
+            .map(|s| s.with_untracked(|h| h.position))
+            .max()
+            .map_or(0, |max| max + 1)
+    })
+}
+
 // ─── Topic signals ────────────────────────────────────────────────────────────
 
 /// Create a topic's signal owned by `owner` (the `App`), not by whichever
@@ -618,6 +975,104 @@ fn parse_add_param_raw(search: &str) -> Option<&str> {
 /// as soon as it hides; the next access to the signal then panics.
 pub(crate) fn new_topic_signal(owner: &Owner, h: TopicHeader) -> RwSignal<TopicHeader> {
     owner.with(|| RwSignal::new(h))
+}
+
+// ─── Import helper ────────────────────────────────────────────────────────────
+
+/// What importing one topic's events did.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ImportOutcome {
+    pub added: usize,
+    pub duplicates: usize,
+}
+
+/// Merge `incoming` into the topic called `name`, creating the topic if it
+/// does not exist. Events already stored (same timestamp) are skipped; the
+/// new ones get fresh ids and are written in a single transaction, after
+/// which the topic's counts are recomputed. `None` if the write failed.
+pub(crate) async fn import_into_topic(
+    db: &Rexie,
+    topic_list: TopicList,
+    app_owner: StoredValue<Owner, LocalStorage>,
+    name: String,
+    incoming: Vec<EventRow>,
+) -> Option<ImportOutcome> {
+    let existing_sig = topic_list.with_untracked(|rows| {
+        rows.iter()
+            .find(|s| s.with_untracked(|h| h.name == name))
+            .copied()
+    });
+    let (topic_id, existing) = match existing_sig {
+        Some(sig) => {
+            let id = sig.with_untracked(|h| h.id.clone());
+            let events = load_events_for_topic(db, &id).await;
+            (id, events)
+        }
+        None => (new_id(), Vec::new()),
+    };
+
+    let (mut fresh, duplicates) = merge_new_events(&existing, incoming);
+    for row in &mut fresh {
+        row.id = new_id();
+        row.topic_id = topic_id.clone();
+    }
+    if !add_events_bulk_idb(db, &fresh).await {
+        return None;
+    }
+    let added = fresh.len();
+    let mut all = existing;
+    all.extend(fresh);
+    let counts = event_row_counts(&all, time_boundaries());
+
+    match existing_sig {
+        Some(sig) => {
+            sig.update(|h| h.set_counts(counts));
+            save_topic_header(db, &sig.get_untracked()).await;
+        }
+        None => {
+            let mut header = TopicHeader {
+                position: next_position(topic_list),
+                ..TopicHeader::new(topic_id, name)
+            };
+            header.set_counts(counts);
+            save_topic_header(db, &header).await;
+            let sig = app_owner.with_value(|o| new_topic_signal(o, header));
+            topic_list.update(|rows| rows.push(sig));
+        }
+    }
+    Some(ImportOutcome { added, duplicates })
+}
+
+impl std::ops::Add for ImportOutcome {
+    type Output = ImportOutcome;
+    fn add(self, o: ImportOutcome) -> ImportOutcome {
+        ImportOutcome {
+            added: self.added + o.added,
+            duplicates: self.duplicates + o.duplicates,
+        }
+    }
+}
+
+/// "1 event", "3 events".
+pub(crate) fn count_noun(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
+/// Toast text after an import, e.g.
+/// "Imported 120 events into Running (15 duplicates skipped)".
+pub(crate) fn import_message(scope: &str, o: ImportOutcome) -> String {
+    let mut msg = format!("Imported {} {scope}", count_noun(o.added, "event"));
+    if o.duplicates > 0 {
+        msg.push_str(&format!(
+            " ({} skipped)",
+            count_noun(o.duplicates, "duplicate")
+        ));
+    }
+    msg
 }
 
 // ─── Foreground refresh helper ────────────────────────────────────────────────
@@ -637,6 +1092,7 @@ pub(crate) async fn refresh_all_topic_counts(db: &Rexie, topic_list: TopicList) 
 #[component]
 pub fn App() -> impl IntoView {
     let topic_list: TopicList = RwSignal::new(Vec::new());
+    let toasts = Toasts::new();
     // Copy handle to the App's owner, for creating topic signals from handlers.
     let app_owner = StoredValue::new_local(Owner::current().expect("App runs inside an owner"));
     let db_ready_signal = RwSignal::new(false);
@@ -713,10 +1169,26 @@ pub fn App() -> impl IntoView {
     });
 
     provide_context(topic_list);
+    provide_context(toasts);
     provide_context(Editing(editing));
     provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
     provide_context(ShowEventDetail(show_event_detail));
+    let pending_delete = RwSignal::new(None::<String>);
+    provide_context(PendingDelete(pending_delete));
+    // Leaving edit mode cancels an armed delete.
+    Effect::new(move |_| {
+        if !editing.get() {
+            pending_delete.set(None);
+        }
+    });
+    // The Edit/Done button disappears with the last topic, so leave edit mode
+    // too; otherwise a topic added next would ignore taps.
+    Effect::new(move |_| {
+        if topic_list.with(Vec::is_empty) {
+            editing.set(false);
+        }
+    });
     provide_context(event_detail_ev);
 
     // ── Foreground detection: refresh counts when a new day has started ───────
@@ -768,56 +1240,14 @@ pub fn App() -> impl IntoView {
         let on_load = Closure::once(move |_: JsValue| {
             let text = reader_clone.result().unwrap().as_string().unwrap();
             let new_rows: Vec<EventRow> = text.lines().filter_map(parse_import_line).collect();
-
             let Some(db) = get_db() else { return };
-
-            let existing_sig = topic_list.with_untracked(|rows| {
-                rows.iter()
-                    .find(|s| s.with_untracked(|h| h.name == topic_name))
-                    .copied()
+            spawn_local(async move {
+                let scope = format!("into {topic_name}");
+                match import_into_topic(&db, topic_list, app_owner, topic_name, new_rows).await {
+                    Some(outcome) => toasts.show(import_message(&scope, outcome)),
+                    None => toasts.show("Import failed"),
+                }
             });
-
-            if let Some(sig) = existing_sig {
-                let topic_id = sig.with_untracked(|h| h.id.clone());
-                spawn_local(async move {
-                    let existing = load_events_for_topic(&db, &topic_id).await;
-                    let existing_ts: std::collections::HashSet<String> =
-                        existing.iter().map(|e| e.timestamp.clone()).collect();
-                    let mut all = existing;
-                    for mut row in new_rows {
-                        if !existing_ts.contains(&row.timestamp) {
-                            row.topic_id = topic_id.clone();
-                            add_event_idb(&db, &row).await;
-                            all.push(row);
-                        }
-                    }
-                    let counts = event_row_counts(&all, time_boundaries());
-                    sig.update(|h| h.set_counts(counts));
-                    save_topic_header(&db, &sig.get_untracked()).await;
-                });
-            } else {
-                let topic_id = new_id();
-                let tid2 = topic_id.clone();
-                let name2 = topic_name.clone();
-                let rows_clone = new_rows.clone();
-                spawn_local(async move {
-                    let rows_with_topic: Vec<EventRow> = rows_clone
-                        .into_iter()
-                        .map(|mut r| {
-                            r.topic_id = tid2.clone();
-                            r
-                        })
-                        .collect();
-                    let mut header = TopicHeader::new(tid2.clone(), name2);
-                    header.set_counts(event_row_counts(&rows_with_topic, time_boundaries()));
-                    save_topic_header(&db, &header).await;
-                    for row in rows_with_topic {
-                        add_event_idb(&db, &row).await;
-                    }
-                    let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
-                    topic_list.update(|rows| rows.push(header_sig));
-                });
-            }
         });
 
         reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
@@ -854,58 +1284,35 @@ pub fn App() -> impl IntoView {
         let on_load = Closure::once(move |_: JsValue| {
             let text = reader_clone.result().unwrap().as_string().unwrap();
             let Some(bulk) = parse_bulk_import(&text) else {
+                toasts.show("Not a trackit backup");
                 return;
             };
             let Some(db) = get_db() else { return };
 
             spawn_local(async move {
+                let topics = bulk.topics.len();
+                let mut total = ImportOutcome::default();
+                let mut failed = false;
                 for topic_export in bulk.topics {
-                    let existing_sig = topic_list.with_untracked(|rows| {
-                        rows.iter()
-                            .find(|s| s.with_untracked(|h| h.name == topic_export.name))
-                            .copied()
-                    });
-
-                    if let Some(sig) = existing_sig {
-                        // Merge events into existing topic
-                        let topic_id = sig.with_untracked(|h| h.id.clone());
-                        let existing = load_events_for_topic(&db, &topic_id).await;
-                        let existing_ts: std::collections::HashSet<String> =
-                            existing.iter().map(|e| e.timestamp.clone()).collect();
-                        let mut all = existing;
-                        for mut row in topic_export.events {
-                            if !existing_ts.contains(&row.timestamp) {
-                                row.id = new_id(); // fresh ID to avoid collision
-                                row.topic_id = topic_id.clone();
-                                add_event_idb(&db, &row).await;
-                                all.push(row);
-                            }
-                        }
-                        let counts = event_row_counts(&all, time_boundaries());
-                        sig.update(|h| h.set_counts(counts));
-                        save_topic_header(&db, &sig.get_untracked()).await;
-                    } else {
-                        // Create new topic
-                        let topic_id = new_id();
-                        let rows_with_topic: Vec<EventRow> = topic_export
-                            .events
-                            .into_iter()
-                            .map(|mut r| {
-                                r.id = new_id();
-                                r.topic_id = topic_id.clone();
-                                r
-                            })
-                            .collect();
-                        let mut header = TopicHeader::new(topic_id, topic_export.name);
-                        header.set_counts(event_row_counts(&rows_with_topic, time_boundaries()));
-                        save_topic_header(&db, &header).await;
-                        for row in &rows_with_topic {
-                            add_event_idb(&db, row).await;
-                        }
-                        let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
-                        topic_list.update(|rows| rows.push(header_sig));
+                    match import_into_topic(
+                        &db,
+                        topic_list,
+                        app_owner,
+                        topic_export.name,
+                        topic_export.events,
+                    )
+                    .await
+                    {
+                        Some(outcome) => total = total + outcome,
+                        None => failed = true,
                     }
                 }
+                let scope = format!("from {}", count_noun(topics, "topic"));
+                let mut msg = import_message(&scope, total);
+                if failed {
+                    msg.push_str(" – some topics failed");
+                }
+                toasts.show(msg);
             });
         });
 
@@ -917,11 +1324,18 @@ pub fn App() -> impl IntoView {
 
     let add_topic = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        let name = new_name.get().trim().to_string();
-        if name.is_empty() {
-            return;
-        }
-        let header = TopicHeader::new(new_id(), name);
+        let name = match validate_topic_name(&new_name.get(), &other_topic_names(topic_list, "")) {
+            Ok(name) => name,
+            Err(NameError::Empty) => return,
+            Err(e) => {
+                toasts.show(e.message());
+                return;
+            }
+        };
+        let header = TopicHeader {
+            position: next_position(topic_list),
+            ..TopicHeader::new(new_id(), name)
+        };
         if let Some(db) = get_db() {
             let h2 = header.clone();
             spawn_local(async move {
@@ -958,21 +1372,25 @@ pub fn App() -> impl IntoView {
                         <div class="header-right">
                             <button
                                 class="header-btn"
+                                type="button"
                                 title="Export all topics (JSON)"
+                                aria-label="Export all topics as JSON backup"
                                 on:click=on_export_all
                             >
                                 "⬇"
                             </button>
                             <label class="header-btn header-btn-import" title="Import all topics (JSON)">
                                 "⬆"
-                                <input type="file" accept=".json" style="display:none" on:change=on_import_json />
+                                <input type="file" accept=".json" class="visually-hidden" aria-label="Import JSON backup" on:change=on_import_json />
                             </label>
                             <label class="header-btn header-btn-import" title="Import topic from .txt">
                                 "↑"
-                                <input type="file" accept=".txt" style="display:none" on:change=on_import />
+                                <input type="file" accept=".txt" class="visually-hidden" aria-label="Import topic from text file" on:change=on_import />
                             </label>
                             <button
                                 class="header-btn header-btn-right"
+                                type="button"
+                                aria-label=move || if adding.get() { "Cancel adding topic" } else { "Add topic" }
                                 on:click=move |_| {
                                     let now_adding = !adding.get();
                                     adding.set(now_adding);
@@ -1039,6 +1457,8 @@ pub fn App() -> impl IntoView {
             >
                 <EventDetail />
             </div>
+
+            <ToastBar />
         </div>
     }
 }
@@ -1064,6 +1484,7 @@ mod tests {
             count_today: 99,
             count_week: 99,
             count_month: 99,
+            position: 0,
             count_total: 99,
         };
         save_topic_header(&db, &header).await;
@@ -1087,6 +1508,30 @@ mod tests {
         assert_ne!(h.count_today, 99, "today should not be stale 99");
     }
 
+    /// Undo removes the event and brings the topic's counts back down.
+    #[wasm_bindgen_test]
+    async fn undo_logged_event_restores_counts() {
+        let db = open_db().await.unwrap();
+        let header = TopicHeader::new(new_id(), "undo-test".into());
+        save_topic_header(&db, &header).await;
+        let sig = RwSignal::new(header);
+
+        let row = EventRow {
+            id: new_id(),
+            topic_id: sig.with_untracked(|h| h.id.clone()),
+            timestamp: now_timestamp(),
+            timestamp_ms: js_sys::Date::now(),
+            ..Default::default()
+        };
+        record_event(&db, row.clone(), sig, |_| {}, |_| {}).await;
+        assert_eq!(sig.get_untracked().count_total, 1);
+
+        assert!(undo_logged_event(&db, &row.id, sig).await);
+        assert_eq!(sig.get_untracked().counts(), Default::default());
+        let topic_id = sig.with_untracked(|h| h.id.clone());
+        assert!(load_events_for_topic(&db, &topic_id).await.is_empty());
+    }
+
     /// A topic added from the `<Show when=adding>` form must survive that
     /// form's scope being disposed when the form hides.
     #[wasm_bindgen_test]
@@ -1102,6 +1547,49 @@ mod tests {
         assert!(
             sig.try_get_untracked().is_some(),
             "topic signal was disposed with the handler scope"
+        );
+    }
+
+    #[test]
+    fn count_noun_singular_and_plural() {
+        assert_eq!(count_noun(0, "topic"), "0 topics");
+        assert_eq!(count_noun(1, "topic"), "1 topic");
+        assert_eq!(count_noun(3, "event"), "3 events");
+    }
+
+    #[test]
+    fn import_message_with_duplicates() {
+        let o = ImportOutcome {
+            added: 120,
+            duplicates: 15,
+        };
+        assert_eq!(
+            import_message("into Running", o),
+            "Imported 120 events into Running (15 duplicates skipped)"
+        );
+    }
+
+    #[test]
+    fn import_message_singular() {
+        let o = ImportOutcome {
+            added: 1,
+            duplicates: 1,
+        };
+        assert_eq!(
+            import_message("into Yoga", o),
+            "Imported 1 event into Yoga (1 duplicate skipped)"
+        );
+    }
+
+    #[test]
+    fn import_message_without_duplicates() {
+        let o = ImportOutcome {
+            added: 2,
+            duplicates: 0,
+        };
+        assert_eq!(
+            import_message("from 2 topics", o),
+            "Imported 2 events from 2 topics"
         );
     }
 

@@ -38,10 +38,21 @@ pub(crate) fn format_timestamp(iso: &str) -> String {
     )
 }
 
+/// A new random id: `crypto.randomUUID()`. That API only exists in secure
+/// contexts (https, localhost); elsewhere fall back to timestamp + random.
 pub(crate) fn new_id() -> String {
-    let ts = js_sys::Date::now() as u64;
-    let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
-    format!("{}-{}", ts, rand)
+    let crypto = window().and_then(|w| w.crypto().ok());
+    let has_random_uuid = crypto.as_ref().is_some_and(|c| {
+        js_sys::Reflect::get(c, &JsValue::from_str("randomUUID")).is_ok_and(|f| f.is_function())
+    });
+    match crypto {
+        Some(c) if has_random_uuid => c.random_uuid(),
+        _ => {
+            let ts = js_sys::Date::now() as u64;
+            let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
+            format!("{ts}-{rand}")
+        }
+    }
 }
 
 /// Period boundaries (epoch ms) used to bucket events into today / week / month.
@@ -119,6 +130,84 @@ pub(crate) fn with_added_event(h: &TopicHeader, ms: f64, b: Bounds) -> TopicHead
     let mut updated = h.clone();
     updated.set_counts(h.counts() + Counts::of_event(ms, b));
     updated
+}
+
+/// Split `incoming` into events not stored yet (matched by `timestamp`, also
+/// de-duplicating within `incoming`) and the number of skipped duplicates.
+pub(crate) fn merge_new_events(
+    existing: &[EventRow],
+    incoming: Vec<EventRow>,
+) -> (Vec<EventRow>, usize) {
+    let mut seen: std::collections::HashSet<String> =
+        existing.iter().map(|e| e.timestamp.clone()).collect();
+    let total = incoming.len();
+    let fresh: Vec<EventRow> = incoming
+        .into_iter()
+        .filter(|e| seen.insert(e.timestamp.clone()))
+        .collect();
+    let duplicates = total - fresh.len();
+    (fresh, duplicates)
+}
+
+/// Why a topic name was rejected.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum NameError {
+    Empty,
+    Duplicate(String),
+}
+
+impl NameError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            NameError::Empty => "A topic needs a name".into(),
+            NameError::Duplicate(name) => format!("A topic named “{name}” already exists"),
+        }
+    }
+}
+
+/// Trim `new` and check it against the names of all *other* topics
+/// (case-insensitive). Returns the cleaned name.
+pub(crate) fn validate_topic_name(new: &str, others: &[String]) -> Result<String, NameError> {
+    let name = new.trim();
+    if name.is_empty() {
+        return Err(NameError::Empty);
+    }
+    let lower = name.to_lowercase();
+    if others.iter().any(|o| o.trim().to_lowercase() == lower) {
+        return Err(NameError::Duplicate(name.to_string()));
+    }
+    Ok(name.to_string())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Direction {
+    Up,
+    Down,
+}
+
+/// Swap `items[idx]` with its neighbour in `dir`. Returns `false` (and leaves
+/// `items` unchanged) when there is no neighbour that way.
+pub(crate) fn move_item<T>(items: &mut [T], idx: usize, dir: Direction) -> bool {
+    let other = match dir {
+        Direction::Up => idx.checked_sub(1),
+        Direction::Down => Some(idx + 1),
+    };
+    match other {
+        Some(other) if idx < items.len() && other < items.len() => {
+            items.swap(idx, other);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Order topics for display: by `position`, then by name.
+pub(crate) fn sort_topics(headers: &mut [TopicHeader]) {
+    headers.sort_by(|a, b| {
+        a.position
+            .cmp(&b.position)
+            .then_with(|| a.name.cmp(&b.name))
+    });
 }
 
 pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
@@ -201,7 +290,7 @@ pub(crate) struct BulkExport {
 /// Serialize all topics+events to JSON and trigger a browser download.
 pub(crate) fn export_all(topics: &[(TopicHeader, Vec<EventRow>)]) {
     let export = BulkExport {
-        version: 1,
+        version: BULK_EXPORT_VERSION,
         topics: topics
             .iter()
             .map(|(h, evs)| TopicExport {
@@ -231,9 +320,15 @@ pub(crate) fn export_all(topics: &[(TopicHeader, Vec<EventRow>)]) {
     web_sys::Url::revoke_object_url(&url).unwrap();
 }
 
-/// Deserialize a bulk-export JSON string; returns `None` on any parse error.
+/// The only backup format version this build understands.
+pub(crate) const BULK_EXPORT_VERSION: u32 = 1;
+
+/// Deserialize a bulk-export JSON string; returns `None` on any parse error
+/// or an unknown format version.
 pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
-    serde_json::from_str(json).ok()
+    serde_json::from_str::<BulkExport>(json)
+        .ok()
+        .filter(|b| b.version == BULK_EXPORT_VERSION)
 }
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
@@ -245,7 +340,8 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bounds, BulkExport, Counts, TopicExport, event_row_counts, parse_bulk_import,
+        Bounds, BulkExport, Counts, Direction, NameError, TopicExport, event_row_counts,
+        merge_new_events, move_item, parse_bulk_import, sort_topics, validate_topic_name,
         with_added_event,
     };
     use crate::db::{EventRow, TopicHeader};
@@ -422,6 +518,7 @@ mod tests {
             count_today: 1,
             count_week: 5,
             count_month: 10,
+            position: 0,
         };
         let json = serde_json::to_string(&h).unwrap();
         let h2: TopicHeader = serde_json::from_str(&json).unwrap();
@@ -461,6 +558,106 @@ mod tests {
         assert!(result.is_some());
         let bulk = result.unwrap();
         assert_eq!(bulk.topics[0].name, "Running");
+    }
+
+    fn ev_at(ts: &str) -> EventRow {
+        EventRow {
+            id: ts.into(),
+            timestamp: ts.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn merge_new_events_skips_duplicates() {
+        let existing = vec![ev_at("2023-11-15T12:00:00.000Z")];
+        let incoming = vec![
+            ev_at("2023-11-15T12:00:00.000Z"), // already stored
+            ev_at("2023-11-16T08:00:00.000Z"),
+            ev_at("2023-11-16T08:00:00.000Z"), // repeated within the file
+        ];
+        let (fresh, dups) = merge_new_events(&existing, incoming);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].timestamp, "2023-11-16T08:00:00.000Z");
+        assert_eq!(dups, 2);
+    }
+
+    #[test]
+    fn merge_new_events_all_new() {
+        let incoming = vec![ev_at("a"), ev_at("b")];
+        let (fresh, dups) = merge_new_events(&[], incoming);
+        assert_eq!((fresh.len(), dups), (2, 0));
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn validate_topic_name_trims() {
+        assert_eq!(
+            validate_topic_name("  Morning Run ", &names(&["Yoga"])),
+            Ok("Morning Run".into())
+        );
+    }
+
+    #[test]
+    fn validate_topic_name_rejects_empty() {
+        assert_eq!(validate_topic_name("   ", &[]), Err(NameError::Empty));
+    }
+
+    #[test]
+    fn validate_topic_name_rejects_duplicate_ignoring_case() {
+        assert_eq!(
+            validate_topic_name("running", &names(&["Running", "Yoga"])),
+            Err(NameError::Duplicate("running".into()))
+        );
+    }
+
+    #[test]
+    fn validate_topic_name_allows_own_name() {
+        // The caller passes only the *other* topics, so keeping a name is fine.
+        assert_eq!(
+            validate_topic_name("Running", &names(&["Yoga"])),
+            Ok("Running".into())
+        );
+    }
+
+    #[test]
+    fn move_item_up_and_down() {
+        let mut v = vec!['a', 'b', 'c'];
+        assert!(move_item(&mut v, 2, Direction::Up));
+        assert_eq!(v, ['a', 'c', 'b']);
+        assert!(move_item(&mut v, 0, Direction::Down));
+        assert_eq!(v, ['c', 'a', 'b']);
+    }
+
+    #[test]
+    fn move_item_at_the_ends_is_a_no_op() {
+        let mut v = vec!['a', 'b'];
+        assert!(!move_item(&mut v, 0, Direction::Up));
+        assert!(!move_item(&mut v, 1, Direction::Down));
+        assert!(!move_item(&mut v, 5, Direction::Up));
+        assert_eq!(v, ['a', 'b']);
+    }
+
+    #[test]
+    fn sort_topics_by_position_then_name() {
+        let h = |name: &str, position| TopicHeader {
+            position,
+            ..TopicHeader::new(name.into(), name.into())
+        };
+        // Legacy records all have position 0 and fall back to name order.
+        let mut v = vec![h("Yoga", 0), h("Swim", 2), h("Run", 0), h("Bike", 1)];
+        sort_topics(&mut v);
+        let names: Vec<&str> = v.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, ["Run", "Yoga", "Bike", "Swim"]);
+    }
+
+    #[test]
+    fn parse_bulk_import_rejects_unknown_version() {
+        let json = r#"{"version":2,"topics":[{"id":"t1","name":"Running","events":[]}]}"#;
+        assert!(parse_bulk_import(json).is_none());
     }
 
     #[test]
@@ -561,21 +758,18 @@ mod wasm_tests {
         assert_eq!(&s[16..17], ":");
     }
 
-    // new_id: format is {digits}-{digits}
+    // new_id: a version-4 UUID (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx)
     #[wasm_bindgen_test]
-    fn new_id_has_numeric_dash_numeric_format() {
+    fn new_id_is_uuid_v4() {
         let id = new_id();
-        let mut parts = id.splitn(2, '-');
-        let ts_part = parts.next().expect("missing ts part");
-        let rand_part = parts.next().expect("missing rand part");
-        assert!(
-            ts_part.chars().all(|c| c.is_ascii_digit()),
-            "ts not numeric: {ts_part}"
+        assert_eq!(id.len(), 36, "unexpected length: {id}");
+        let groups: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            groups.iter().map(|g| g.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
         );
-        assert!(
-            rand_part.chars().all(|c| c.is_ascii_digit()),
-            "rand not numeric: {rand_part}"
-        );
+        assert!(groups[2].starts_with('4'), "not version 4: {id}");
+        assert!(id.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
     }
 
     #[wasm_bindgen_test]

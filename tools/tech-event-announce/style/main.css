@@ -17,6 +17,7 @@
   --radius:             12px;
   --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
   --color-danger:       #d32f2f;
+  --color-warning:      #a05a00;
 }
 
 html, body {
@@ -249,9 +250,72 @@ html, body {
     --color-muted:    #8e8e93;
     --shadow:         0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
     --color-danger:   #ef5350;
+    --color-warning:  #ffb74d;
   }
 }
 
 @media (inverted-colors: inverted) {
   .app-header { filter: invert(1); }
+}
+
+/* Validation hint under a field (e.g. date is not a Saturday) */
+.form-hint {
+  margin-top: 4px;
+  font-size: .8125rem;
+  color: var(--color-warning);
+}
+.form-hint:empty { display: none; }
+
+/* Clear-draft button under the form */
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.btn-clear {
+  padding: 5px 14px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: .8125rem;
+  cursor: pointer;
+}
+.btn-clear:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+}
+
+/* Collapsible settings (start time, signature) */
+.settings {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+.settings summary {
+  cursor: pointer;
+  font-size: .8125rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  user-select: none;
+}
+.settings[open] summary { margin-bottom: 10px; }
+.settings .form-field + .form-field { margin-top: 10px; }
+
+/* Link styled as a pill button (mailto) */
+.btn-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.btn-link.disabled {
+  opacity: 0.38;
+  pointer-events: none;
+  border-color: var(--color-border);
+  color: var(--color-muted);
+}
+
+.output-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }

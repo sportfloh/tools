@@ -1,32 +1,54 @@
-pub fn chat(date: &str, topic: &str, description: &str) -> String {
+/// User-adjustable parts of the announcement texts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Settings {
+    /// Start time as written in the text, e.g. "14 Uhr".
+    pub time: String,
+    /// Name under the e-mail.
+    pub signature: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            time: "14 Uhr".into(),
+            signature: "sportfloh".into(),
+        }
+    }
+}
+
+pub fn chat(date: &str, topic: &str, description: &str, s: &Settings) -> String {
     format!(
         "Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
          {description}\n\n\
-         Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
-         Diese Info dürft Ihr gerne weiterleiten."
+         Wir starten wie immer um {time}; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
+         Diese Info dürft Ihr gerne weiterleiten.",
+        time = s.time
     )
 }
 
-pub fn email_subject(date: &str, topic: &str) -> String {
-    format!("Tech-Event - {topic} - Samstag {date} - 14 Uhr")
+pub fn email_subject(date: &str, topic: &str, s: &Settings) -> String {
+    format!("Tech-Event - {topic} - Samstag {date} - {}", s.time)
 }
 
-pub fn email_body(date: &str, topic: &str, description: &str) -> String {
+pub fn email_body(date: &str, topic: &str, description: &str, s: &Settings) -> String {
     format!(
         "Hallo Zusammen,\n\n\
          Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
          {description}\n\n\
-         Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
+         Wir starten wie immer um {time}; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
          Diese Info dürft Ihr gerne weiterleiten.\n\n\
          Gruß,\n\
-         sportfloh"
+         {signature}",
+        time = s.time,
+        signature = s.signature
     )
 }
 
-pub fn mastodon(date: &str, topic: &str, description: &str) -> String {
+pub fn mastodon(date: &str, topic: &str, description: &str, s: &Settings) -> String {
     format!(
-        "Kommenden Samstag ({date} ab 14 Uhr) ist wieder Tech-Event, zum Thema: {topic}\n\n\
-         {description}"
+        "Kommenden Samstag ({date} ab {time}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
+         {description}",
+        time = s.time
     )
 }
 
@@ -70,15 +92,207 @@ fn find_url_start(s: &str) -> Option<usize> {
     }
 }
 
+/// Parse a German date `D.M.YYYY` / `DD.MM.YYYY` into `(year, month, day)`,
+/// rejecting days that do not exist in that month (leap years included).
+pub fn parse_de_date(s: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = s.trim().split('.');
+    let (d, m, y) = (parts.next()?, parts.next()?, parts.next()?);
+    let digits =
+        |p: &str, lens: &[usize]| lens.contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit());
+    if parts.next().is_some() || !digits(d, &[1, 2]) || !digits(m, &[1, 2]) || !digits(y, &[4]) {
+        return None;
+    }
+    let (d, m, y): (u32, u32, i32) = (d.parse().ok()?, m.parse().ok()?, y.parse().ok()?);
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days_in_month = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=days_in_month).contains(&d).then_some((y, m, d))
+}
+
+/// Day of the week for a Gregorian date, 0 = Sunday … 6 = Saturday.
+pub fn weekday(y: i32, m: u32, d: u32) -> u32 {
+    // Sakamoto's algorithm.
+    const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if m < 3 { y - 1 } else { y };
+    (y + y / 4 - y / 100 + y / 400 + T[(m - 1) as usize] + d as i32).rem_euclid(7) as u32
+}
+
+/// Hint shown under the date field: `None` for an empty field or a valid
+/// Saturday, otherwise what is wrong with it.
+pub fn date_warning(s: &str) -> Option<String> {
+    const DAYS: [&str; 7] = [
+        "Sonntag",
+        "Montag",
+        "Dienstag",
+        "Mittwoch",
+        "Donnerstag",
+        "Freitag",
+        "Samstag",
+    ];
+    if s.trim().is_empty() {
+        return None;
+    }
+    let Some((y, m, d)) = parse_de_date(s) else {
+        return Some("Ungültiges Datum (TT.MM.JJJJ)".into());
+    };
+    match weekday(y, m, d) {
+        6 => None,
+        wd => Some(format!("Achtung: kein Samstag ({})", DAYS[wd as usize])),
+    }
+}
+
+/// A `mailto:` URL that opens a new mail with `subject` and `body` filled in
+/// (RFC 6068: UTF-8 percent-encoding, line breaks as `%0D%0A`).
+pub fn mailto_url(subject: &str, body: &str) -> String {
+    let body = body.replace("\r\n", "\n").replace('\n', "\r\n");
+    format!(
+        "mailto:?subject={}&body={}",
+        percent_encode(subject),
+        percent_encode(&body)
+    )
+}
+
+/// Percent-encode every byte except RFC 3986 unreserved characters.
+fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- mailto ---
+
+    #[test]
+    fn mailto_url_encodes_reserved_chars_and_spaces() {
+        assert_eq!(
+            mailto_url("Tech-Event - Rust & Co?", "x"),
+            "mailto:?subject=Tech-Event%20-%20Rust%20%26%20Co%3F&body=x"
+        );
+    }
+
+    #[test]
+    fn mailto_url_encodes_umlauts_and_newlines() {
+        assert_eq!(
+            mailto_url("", "Hallo\nGrüße"),
+            "mailto:?subject=&body=Hallo%0D%0AGr%C3%BC%C3%9Fe"
+        );
+    }
+
+    #[test]
+    fn mailto_url_round_trips_full_email() {
+        let s = Settings::default();
+        let url = mailto_url(
+            &email_subject("10.10.2026", "Rust", &s),
+            &email_body("10.10.2026", "Rust", "Text.", &s),
+        );
+        assert!(url.starts_with("mailto:?subject=Tech-Event%20-%20Rust"));
+        assert!(!url.contains(' ') && !url.contains('\n'));
+        assert!(url.ends_with("Gru%C3%9F%2C%0D%0Asportfloh"));
+    }
+
+    // --- settings ---
+
+    fn custom() -> Settings {
+        Settings {
+            time: "15:30 Uhr".into(),
+            signature: "Das Orga-Team".into(),
+        }
+    }
+
+    #[test]
+    fn subject_uses_custom_time() {
+        assert_eq!(
+            email_subject("08.11.2025", "Rust", &custom()),
+            "Tech-Event - Rust - Samstag 08.11.2025 - 15:30 Uhr"
+        );
+    }
+
+    #[test]
+    fn email_body_uses_custom_signature_and_time() {
+        let r = email_body("08.11.2025", "Rust", "Text.", &custom());
+        assert!(r.ends_with("Gruß,\nDas Orga-Team"), "got: {r}");
+        assert!(r.contains("um 15:30 Uhr;"));
+        assert!(!r.contains("14 Uhr") && !r.contains("sportfloh"));
+    }
+
+    #[test]
+    fn chat_and_mastodon_use_custom_time() {
+        assert!(chat("08.11.2025", "Rust", "Text.", &custom()).contains("um 15:30 Uhr;"));
+        assert!(mastodon("08.11.2025", "Rust", "Text.", &custom()).contains("ab 15:30 Uhr)"));
+    }
+
+    // --- date validation ---
+
+    #[test]
+    fn parse_de_date_valid() {
+        assert_eq!(parse_de_date("08.11.2025"), Some((2025, 11, 8)));
+        assert_eq!(parse_de_date(" 8.11.2025 "), Some((2025, 11, 8)));
+    }
+
+    #[test]
+    fn parse_de_date_rejects_impossible_dates() {
+        assert_eq!(parse_de_date("31.04.2026"), None);
+        assert_eq!(parse_de_date("00.01.2026"), None);
+        assert_eq!(parse_de_date("12.13.2026"), None);
+        assert_eq!(parse_de_date("2026-10-10"), None);
+        assert_eq!(parse_de_date("10.10.26"), None);
+        assert_eq!(parse_de_date(""), None);
+    }
+
+    #[test]
+    fn parse_de_date_handles_leap_years() {
+        assert_eq!(parse_de_date("29.02.2024"), Some((2024, 2, 29)));
+        assert_eq!(parse_de_date("29.02.2025"), None);
+        assert_eq!(parse_de_date("29.02.2000"), Some((2000, 2, 29)));
+        assert_eq!(parse_de_date("29.02.1900"), None);
+    }
+
+    #[test]
+    fn weekday_known_dates() {
+        assert_eq!(weekday(2025, 11, 8), 6); // Saturday
+        assert_eq!(weekday(2026, 10, 10), 6); // Saturday
+        assert_eq!(weekday(2025, 11, 11), 2); // Tuesday
+        assert_eq!(weekday(2024, 2, 29), 4); // Thursday
+        assert_eq!(weekday(2000, 1, 1), 6); // Saturday
+    }
+
+    #[test]
+    fn date_warning_messages() {
+        assert_eq!(date_warning(""), None);
+        assert_eq!(date_warning("10.10.2026"), None);
+        assert_eq!(
+            date_warning("11.11.2025").as_deref(),
+            Some("Achtung: kein Samstag (Dienstag)")
+        );
+        assert_eq!(
+            date_warning("31.04.2026").as_deref(),
+            Some("Ungültiges Datum (TT.MM.JJJJ)")
+        );
+    }
 
     // --- chat ---
 
     #[test]
     fn chat_renders_full_template() {
-        let r = chat("08.11.2025", "Rust im Alltag", "Ein Vortrag über Rust.");
+        let r = chat(
+            "08.11.2025",
+            "Rust im Alltag",
+            "Ein Vortrag über Rust.",
+            &Settings::default(),
+        );
         assert!(r.contains("Samstag (08.11.2025)"), "missing date in parens");
         assert!(r.contains("zum Thema: Rust im Alltag"), "missing topic");
         assert!(
@@ -92,7 +306,7 @@ mod tests {
 
     #[test]
     fn chat_with_empty_inputs_preserves_structure() {
-        let r = chat("", "", "");
+        let r = chat("", "", "", &Settings::default());
         assert!(
             r.contains("Samstag ()"),
             "date slot should be empty inside parens"
@@ -106,21 +320,29 @@ mod tests {
     #[test]
     fn email_subject_renders_correctly() {
         assert_eq!(
-            email_subject("08.11.2025", "Rust im Alltag"),
+            email_subject("08.11.2025", "Rust im Alltag", &Settings::default()),
             "Tech-Event - Rust im Alltag - Samstag 08.11.2025 - 14 Uhr"
         );
     }
 
     #[test]
     fn email_subject_empty_inputs() {
-        assert_eq!(email_subject("", ""), "Tech-Event -  - Samstag  - 14 Uhr");
+        assert_eq!(
+            email_subject("", "", &Settings::default()),
+            "Tech-Event -  - Samstag  - 14 Uhr"
+        );
     }
 
     // --- email_body ---
 
     #[test]
     fn email_body_renders_full_template() {
-        let r = email_body("08.11.2025", "Rust im Alltag", "Ein Vortrag über Rust.");
+        let r = email_body(
+            "08.11.2025",
+            "Rust im Alltag",
+            "Ein Vortrag über Rust.",
+            &Settings::default(),
+        );
         assert!(r.starts_with("Hallo Zusammen,"), "must start with greeting");
         assert!(r.contains("Samstag (08.11.2025)"));
         assert!(r.contains("zum Thema: Rust im Alltag"));
@@ -137,7 +359,12 @@ mod tests {
 
     #[test]
     fn mastodon_renders_correctly() {
-        let r = mastodon("08.11.2025", "Rust im Alltag", "Ein Vortrag.");
+        let r = mastodon(
+            "08.11.2025",
+            "Rust im Alltag",
+            "Ein Vortrag.",
+            &Settings::default(),
+        );
         assert!(r.contains("08.11.2025 ab 14 Uhr"), "missing date+time");
         assert!(r.contains("zum Thema: Rust im Alltag"));
         assert!(r.contains("Ein Vortrag."));
