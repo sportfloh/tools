@@ -2,7 +2,12 @@ use leptos::prelude::*;
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
-use crate::templates;
+use crate::{storage, templates};
+
+// localStorage keys for the draft (the date is not stored: it always
+// defaults to the next Saturday, so a stale date cannot come back).
+const KEY_TOPIC: &str = "tea.topic";
+const KEY_DESCR: &str = "tea.descr";
 
 /// Returns the date of the next Saturday (from today) as `DD.MM.YYYY`.
 /// If today is Saturday, returns next week's Saturday.
@@ -27,8 +32,14 @@ fn next_saturday_str() -> String {
 pub fn App() -> impl IntoView {
     // Date is stored and displayed directly as DD.MM.YYYY — no conversion layer.
     let date = RwSignal::new(next_saturday_str());
-    let topic = RwSignal::new(String::new());
-    let descr = RwSignal::new(String::new());
+    let topic = RwSignal::new(storage::load(KEY_TOPIC).unwrap_or_default());
+    let descr = RwSignal::new(storage::load(KEY_DESCR).unwrap_or_default());
+    Effect::new(move |_| storage::save(KEY_TOPIC, &topic.get()));
+    Effect::new(move |_| storage::save(KEY_DESCR, &descr.get()));
+    let clear_draft = move |_| {
+        topic.set(String::new());
+        descr.set(String::new());
+    };
 
     let chat_text = Memo::new(move |_| {
         let d = date.get();
@@ -105,6 +116,16 @@ pub fn App() -> impl IntoView {
                             prop:value=descr
                             on:input=move |ev| descr.set(event_target_value(&ev))
                         />
+                    </div>
+                    <div class="form-actions">
+                        <button
+                            class="btn-clear"
+                            type="button"
+                            on:click=clear_draft
+                            disabled=move || topic.with(String::is_empty) && descr.with(String::is_empty)
+                        >
+                            "Leeren"
+                        </button>
                     </div>
                 </section>
 

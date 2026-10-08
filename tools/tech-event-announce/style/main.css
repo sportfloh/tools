@@ -265,3 +265,22 @@ html, body {
   color: var(--color-warning);
 }
 .form-hint:empty { display: none; }
+
+/* Clear-draft button under the form */
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.btn-clear {
+  padding: 5px 14px;
+  border: 1.5px solid var(--color-border);
+  border-radius: 20px;
+  background: transparent;
+  color: var(--color-muted);
+  font-size: .8125rem;
+  cursor: pointer;
+}
+.btn-clear:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+}
