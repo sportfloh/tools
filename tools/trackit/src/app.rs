@@ -1,11 +1,12 @@
 use crate::db::{
-    DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
-    delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic, load_topic_headers, open_db,
-    refresh_topic_counts_idb, save_topic_header,
+    DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_events_bulk_idb,
+    delete_event_idb, delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic,
+    load_topic_headers, open_db, refresh_topic_counts_idb, save_topic_header,
 };
 use crate::time::{
-    event_row_counts, export_all, export_topic, format_timestamp, new_id, now_local_datetime_str,
-    now_timestamp, parse_bulk_import, parse_import_line, time_boundaries, with_added_event,
+    event_row_counts, export_all, export_topic, format_timestamp, merge_new_events, new_id,
+    now_local_datetime_str, now_timestamp, parse_bulk_import, parse_import_line, time_boundaries,
+    with_added_event,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -620,6 +621,69 @@ pub(crate) fn new_topic_signal(owner: &Owner, h: TopicHeader) -> RwSignal<TopicH
     owner.with(|| RwSignal::new(h))
 }
 
+// ─── Import helper ────────────────────────────────────────────────────────────
+
+/// What importing one topic's events did.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ImportOutcome {
+    pub added: usize,
+    pub duplicates: usize,
+}
+
+/// Merge `incoming` into the topic called `name`, creating the topic if it
+/// does not exist. Events already stored (same timestamp) are skipped; the
+/// new ones get fresh ids and are written in a single transaction, after
+/// which the topic's counts are recomputed. `None` if the write failed.
+pub(crate) async fn import_into_topic(
+    db: &Rexie,
+    topic_list: TopicList,
+    app_owner: StoredValue<Owner, LocalStorage>,
+    name: String,
+    incoming: Vec<EventRow>,
+) -> Option<ImportOutcome> {
+    let existing_sig = topic_list.with_untracked(|rows| {
+        rows.iter()
+            .find(|s| s.with_untracked(|h| h.name == name))
+            .copied()
+    });
+    let (topic_id, existing) = match existing_sig {
+        Some(sig) => {
+            let id = sig.with_untracked(|h| h.id.clone());
+            let events = load_events_for_topic(db, &id).await;
+            (id, events)
+        }
+        None => (new_id(), Vec::new()),
+    };
+
+    let (mut fresh, duplicates) = merge_new_events(&existing, incoming);
+    for row in &mut fresh {
+        row.id = new_id();
+        row.topic_id = topic_id.clone();
+    }
+    if !add_events_bulk_idb(db, &fresh).await {
+        return None;
+    }
+    let added = fresh.len();
+    let mut all = existing;
+    all.extend(fresh);
+    let counts = event_row_counts(&all, time_boundaries());
+
+    match existing_sig {
+        Some(sig) => {
+            sig.update(|h| h.set_counts(counts));
+            save_topic_header(db, &sig.get_untracked()).await;
+        }
+        None => {
+            let mut header = TopicHeader::new(topic_id, name);
+            header.set_counts(counts);
+            save_topic_header(db, &header).await;
+            let sig = app_owner.with_value(|o| new_topic_signal(o, header));
+            topic_list.update(|rows| rows.push(sig));
+        }
+    }
+    Some(ImportOutcome { added, duplicates })
+}
+
 // ─── Foreground refresh helper ────────────────────────────────────────────────
 
 /// Recompute and persist every topic's counts from its stored events,
@@ -768,56 +832,10 @@ pub fn App() -> impl IntoView {
         let on_load = Closure::once(move |_: JsValue| {
             let text = reader_clone.result().unwrap().as_string().unwrap();
             let new_rows: Vec<EventRow> = text.lines().filter_map(parse_import_line).collect();
-
             let Some(db) = get_db() else { return };
-
-            let existing_sig = topic_list.with_untracked(|rows| {
-                rows.iter()
-                    .find(|s| s.with_untracked(|h| h.name == topic_name))
-                    .copied()
+            spawn_local(async move {
+                import_into_topic(&db, topic_list, app_owner, topic_name, new_rows).await;
             });
-
-            if let Some(sig) = existing_sig {
-                let topic_id = sig.with_untracked(|h| h.id.clone());
-                spawn_local(async move {
-                    let existing = load_events_for_topic(&db, &topic_id).await;
-                    let existing_ts: std::collections::HashSet<String> =
-                        existing.iter().map(|e| e.timestamp.clone()).collect();
-                    let mut all = existing;
-                    for mut row in new_rows {
-                        if !existing_ts.contains(&row.timestamp) {
-                            row.topic_id = topic_id.clone();
-                            add_event_idb(&db, &row).await;
-                            all.push(row);
-                        }
-                    }
-                    let counts = event_row_counts(&all, time_boundaries());
-                    sig.update(|h| h.set_counts(counts));
-                    save_topic_header(&db, &sig.get_untracked()).await;
-                });
-            } else {
-                let topic_id = new_id();
-                let tid2 = topic_id.clone();
-                let name2 = topic_name.clone();
-                let rows_clone = new_rows.clone();
-                spawn_local(async move {
-                    let rows_with_topic: Vec<EventRow> = rows_clone
-                        .into_iter()
-                        .map(|mut r| {
-                            r.topic_id = tid2.clone();
-                            r
-                        })
-                        .collect();
-                    let mut header = TopicHeader::new(tid2.clone(), name2);
-                    header.set_counts(event_row_counts(&rows_with_topic, time_boundaries()));
-                    save_topic_header(&db, &header).await;
-                    for row in rows_with_topic {
-                        add_event_idb(&db, &row).await;
-                    }
-                    let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
-                    topic_list.update(|rows| rows.push(header_sig));
-                });
-            }
         });
 
         reader.set_onload(Some(on_load.as_ref().unchecked_ref()));
@@ -860,51 +878,14 @@ pub fn App() -> impl IntoView {
 
             spawn_local(async move {
                 for topic_export in bulk.topics {
-                    let existing_sig = topic_list.with_untracked(|rows| {
-                        rows.iter()
-                            .find(|s| s.with_untracked(|h| h.name == topic_export.name))
-                            .copied()
-                    });
-
-                    if let Some(sig) = existing_sig {
-                        // Merge events into existing topic
-                        let topic_id = sig.with_untracked(|h| h.id.clone());
-                        let existing = load_events_for_topic(&db, &topic_id).await;
-                        let existing_ts: std::collections::HashSet<String> =
-                            existing.iter().map(|e| e.timestamp.clone()).collect();
-                        let mut all = existing;
-                        for mut row in topic_export.events {
-                            if !existing_ts.contains(&row.timestamp) {
-                                row.id = new_id(); // fresh ID to avoid collision
-                                row.topic_id = topic_id.clone();
-                                add_event_idb(&db, &row).await;
-                                all.push(row);
-                            }
-                        }
-                        let counts = event_row_counts(&all, time_boundaries());
-                        sig.update(|h| h.set_counts(counts));
-                        save_topic_header(&db, &sig.get_untracked()).await;
-                    } else {
-                        // Create new topic
-                        let topic_id = new_id();
-                        let rows_with_topic: Vec<EventRow> = topic_export
-                            .events
-                            .into_iter()
-                            .map(|mut r| {
-                                r.id = new_id();
-                                r.topic_id = topic_id.clone();
-                                r
-                            })
-                            .collect();
-                        let mut header = TopicHeader::new(topic_id, topic_export.name);
-                        header.set_counts(event_row_counts(&rows_with_topic, time_boundaries()));
-                        save_topic_header(&db, &header).await;
-                        for row in &rows_with_topic {
-                            add_event_idb(&db, row).await;
-                        }
-                        let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
-                        topic_list.update(|rows| rows.push(header_sig));
-                    }
+                    import_into_topic(
+                        &db,
+                        topic_list,
+                        app_owner,
+                        topic_export.name,
+                        topic_export.events,
+                    )
+                    .await;
                 }
             });
         });

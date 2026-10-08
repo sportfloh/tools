@@ -121,6 +121,23 @@ pub(crate) fn with_added_event(h: &TopicHeader, ms: f64, b: Bounds) -> TopicHead
     updated
 }
 
+/// Split `incoming` into events not stored yet (matched by `timestamp`, also
+/// de-duplicating within `incoming`) and the number of skipped duplicates.
+pub(crate) fn merge_new_events(
+    existing: &[EventRow],
+    incoming: Vec<EventRow>,
+) -> (Vec<EventRow>, usize) {
+    let mut seen: std::collections::HashSet<String> =
+        existing.iter().map(|e| e.timestamp.clone()).collect();
+    let total = incoming.len();
+    let fresh: Vec<EventRow> = incoming
+        .into_iter()
+        .filter(|e| seen.insert(e.timestamp.clone()))
+        .collect();
+    let duplicates = total - fresh.len();
+    (fresh, duplicates)
+}
+
 pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
     let line = line.trim();
     if line.is_empty() {
@@ -251,8 +268,8 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bounds, BulkExport, Counts, TopicExport, event_row_counts, parse_bulk_import,
-        with_added_event,
+        Bounds, BulkExport, Counts, TopicExport, event_row_counts, merge_new_events,
+        parse_bulk_import, with_added_event,
     };
     use crate::db::{EventRow, TopicHeader};
 
@@ -467,6 +484,35 @@ mod tests {
         assert!(result.is_some());
         let bulk = result.unwrap();
         assert_eq!(bulk.topics[0].name, "Running");
+    }
+
+    fn ev_at(ts: &str) -> EventRow {
+        EventRow {
+            id: ts.into(),
+            timestamp: ts.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn merge_new_events_skips_duplicates() {
+        let existing = vec![ev_at("2023-11-15T12:00:00.000Z")];
+        let incoming = vec![
+            ev_at("2023-11-15T12:00:00.000Z"), // already stored
+            ev_at("2023-11-16T08:00:00.000Z"),
+            ev_at("2023-11-16T08:00:00.000Z"), // repeated within the file
+        ];
+        let (fresh, dups) = merge_new_events(&existing, incoming);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].timestamp, "2023-11-16T08:00:00.000Z");
+        assert_eq!(dups, 2);
+    }
+
+    #[test]
+    fn merge_new_events_all_new() {
+        let incoming = vec![ev_at("a"), ev_at("b")];
+        let (fresh, dups) = merge_new_events(&[], incoming);
+        assert_eq!((fresh.len(), dups), (2, 0));
     }
 
     #[test]

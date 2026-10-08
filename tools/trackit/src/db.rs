@@ -173,6 +173,8 @@ pub(crate) async fn refresh_topic_counts_idb(db: &Rexie, header: &TopicHeader) -
     updated
 }
 
+/// Single-event put; production code uses the atomic / bulk variants.
+#[cfg(test)]
 pub(crate) async fn add_event_idb(db: &Rexie, row: &EventRow) {
     let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
         Ok(t) => t,
@@ -186,6 +188,28 @@ pub(crate) async fn add_event_idb(db: &Rexie, row: &EventRow) {
         store.put(&val, None).await.ok();
     }
     tx.done().await.ok();
+}
+
+/// Write all `rows` in one readwrite transaction: either every row is stored
+/// or (on failure) none is. Returns whether the transaction committed.
+pub(crate) async fn add_events_bulk_idb(db: &Rexie, rows: &[EventRow]) -> bool {
+    let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let store = match tx.store("events") {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    for row in rows {
+        let Ok(val) = serde_wasm_bindgen::to_value(row) else {
+            return false;
+        };
+        if store.put(&val, None).await.is_err() {
+            return false;
+        }
+    }
+    tx.done().await.is_ok()
 }
 
 /// Overwrite `row` (e.g. with a GPS fix) only if an event with its id is
@@ -285,9 +309,9 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
-        delete_topic_idb, enrich_event_idb, load_events_for_topic, load_topic_headers, open_db,
-        open_db_named, refresh_topic_counts_idb, save_topic_header,
+        EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, add_events_bulk_idb,
+        delete_event_idb, delete_topic_idb, enrich_event_idb, load_events_for_topic,
+        load_topic_headers, open_db, open_db_named, refresh_topic_counts_idb, save_topic_header,
     };
     use wasm_bindgen_test::*;
 
@@ -546,5 +570,27 @@ mod wasm_tests {
             .expect("first open succeeds")
             .close();
         assert!(open_db_named("trackit-test-version", 1).await.is_err());
+    }
+
+    // IDB: bulk insert stores every row in one go
+    #[wasm_bindgen_test]
+    async fn idb_add_events_bulk_writes_all() {
+        let db = open_db().await.unwrap();
+        let rows: Vec<EventRow> = (0..50)
+            .map(|i| test_event(&format!("ev-bulk-{i}"), "topic-bulk-1", i as f64))
+            .collect();
+        assert!(
+            add_events_bulk_idb(&db, &rows).await,
+            "transaction should commit"
+        );
+        let events = load_events_for_topic(&db, "topic-bulk-1").await;
+        assert_eq!(events.len(), 50);
+    }
+
+    // IDB: bulk insert of nothing is a successful no-op
+    #[wasm_bindgen_test]
+    async fn idb_add_events_bulk_empty_is_ok() {
+        let db = open_db().await.unwrap();
+        assert!(add_events_bulk_idb(&db, &[]).await);
     }
 }
