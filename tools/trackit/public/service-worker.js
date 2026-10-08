@@ -1,4 +1,8 @@
-const CACHE_NAME = 'event-tracker-v2';
+// Cache Storage is shared by every tool on this origin, so only ever touch
+// caches carrying this tool's own prefix (plus its pre-rename 'event-tracker-'
+// name).
+const CACHE_PREFIX = 'trackit-';
+const CACHE_NAME = 'trackit-v3';
 
 // Pre-cache static shell assets on install.
 // Use self.registration.scope so the paths are correct on any deployment
@@ -13,13 +17,16 @@ self.addEventListener('install', function(event) {
   self.skipWaiting();
 });
 
-// Remove old caches on activate
+// Remove this tool's outdated caches on activate
 self.addEventListener('activate', function(event) {
   event.waitUntil(
     caches.keys().then(function(cacheNames) {
       return Promise.all(
         cacheNames
-          .filter(function(name) { return name !== CACHE_NAME; })
+          .filter(function(name) {
+            var ours = name.startsWith(CACHE_PREFIX) || name.startsWith('event-tracker-');
+            return ours && name !== CACHE_NAME;
+          })
           .map(function(name) { return caches.delete(name); })
       );
     }).then(function() { return self.clients.claim(); })

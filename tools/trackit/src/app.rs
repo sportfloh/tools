@@ -1,11 +1,11 @@
 use crate::db::{
     DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
-    delete_topic_idb, get_db, load_events_for_topic, load_topic_headers, open_db,
+    delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic, load_topic_headers, open_db,
     refresh_topic_counts_idb, save_topic_header,
 };
 use crate::time::{
     event_row_counts, export_all, export_topic, format_timestamp, new_id, now_local_datetime_str,
-    now_timestamp, parse_bulk_import, parse_import_line, time_boundaries,
+    now_timestamp, parse_bulk_import, parse_import_line, time_boundaries, with_added_event,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -69,6 +69,48 @@ async fn get_gps() -> Option<GpsSnapshot> {
     })
 }
 
+impl GpsSnapshot {
+    fn applied_to(self, row: EventRow) -> EventRow {
+        EventRow {
+            lat: Some(self.lat),
+            lon: Some(self.lon),
+            altitude: self.altitude,
+            heading: self.heading,
+            speed: self.speed,
+            accuracy: Some(self.accuracy),
+            altitude_accuracy: self.altitude_accuracy,
+            ..row
+        }
+    }
+}
+
+/// Log `row` for the topic in `header`: persist the event together with the
+/// bumped counts, then attach a GPS fix in the background once one arrives.
+/// `on_saved` runs after the event has been persisted, `on_enriched` after the
+/// GPS fix has been written. The fix is dropped if the event was deleted while
+/// waiting for it.
+async fn record_event(
+    db: &Rexie,
+    row: EventRow,
+    header: RwSignal<TopicHeader>,
+    on_saved: impl FnOnce(&EventRow),
+    on_enriched: impl FnOnce(&EventRow),
+) {
+    let updated =
+        header.with_untracked(|h| with_added_event(h, row.timestamp_ms, time_boundaries()));
+    if !add_event_and_update_header_idb(db, &row, &updated).await {
+        return;
+    }
+    header.set(updated);
+    on_saved(&row);
+    if let Some(gps) = get_gps().await {
+        let enriched = gps.applied_to(row);
+        if enrich_event_idb(db, &enriched).await {
+            on_enriched(&enriched);
+        }
+    }
+}
+
 pub(crate) const PAGE_SIZE: usize = 50;
 
 // ─── Context newtypes ─────────────────────────────────────────────────────────
@@ -78,8 +120,6 @@ pub(crate) const PAGE_SIZE: usize = 50;
 pub(crate) struct Editing(pub(crate) RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct ShowDetail(pub(crate) RwSignal<bool>);
-#[derive(Clone, Copy)]
-pub(crate) struct DbReady(pub(crate) RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct ShowEventDetail(pub(crate) RwSignal<bool>);
 
@@ -92,58 +132,21 @@ pub(crate) type TopicList = RwSignal<Vec<RwSignal<TopicHeader>>>;
 #[component]
 pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     let topic_list = use_context::<TopicList>().expect("topic_list context");
-    let db_ready = use_context::<DbReady>().expect("db_ready context").0;
     let editing = use_context::<Editing>().expect("editing context").0;
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
 
     let add_event = move |_| {
         let Some(db) = get_db() else { return };
-        let _ = db_ready.get_untracked(); // just to acknowledge the signal
-        let topic_id = topic_signal.with_untracked(|h| h.id.clone());
-        let ts = now_timestamp();
-        let ts_ms = js_sys::Date::now();
         let row = EventRow {
             id: new_id(),
-            topic_id,
-            timestamp: ts,
-            timestamp_ms: ts_ms,
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            topic_id: topic_signal.with_untracked(|h| h.id.clone()),
+            timestamp: now_timestamp(),
+            timestamp_ms: js_sys::Date::now(),
+            ..Default::default()
         };
-        let row2 = row.clone();
         spawn_local(async move {
-            let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
-            let ms = row2.timestamp_ms;
-            let updated = topic_signal.with_untracked(|h| TopicHeader {
-                count_total: h.count_total + 1,
-                count_today: h.count_today + (ms >= today_start && ms < today_end) as u32,
-                count_week: h.count_week + (ms >= week_start && ms <= now_ms) as u32,
-                count_month: h.count_month + (ms >= month_start) as u32,
-                ..h.clone()
-            });
-            if add_event_and_update_header_idb(&db, &row2, &updated).await {
-                topic_signal.set(updated);
-            }
-            // Background: enrich with GPS once acquired
-            if let Some(gps) = get_gps().await {
-                let enriched = EventRow {
-                    lat: Some(gps.lat),
-                    lon: Some(gps.lon),
-                    altitude: gps.altitude,
-                    heading: gps.heading,
-                    speed: gps.speed,
-                    accuracy: Some(gps.accuracy),
-                    altitude_accuracy: gps.altitude_accuracy,
-                    ..row2
-                };
-                add_event_idb(&db, &enriched).await;
-            }
+            record_event(&db, row, topic_signal, |_| {}, |_| {}).await;
         });
     };
 
@@ -276,62 +279,44 @@ pub fn TopicDetail() -> impl IntoView {
     };
 
     let add_manual_event = move |_: leptos::ev::MouseEvent| {
-        let dt_str = manual_dt.get();
-        let d = js_sys::Date::new(&JsValue::from_str(&dt_str));
-        if !d.get_time().is_nan() {
-            let iso = d.to_iso_string().as_string().unwrap_or_default();
-            let ts_ms = d.get_time();
-            let topic_id = detail_id.get_untracked();
+        let d = js_sys::Date::new(&JsValue::from_str(&manual_dt.get()));
+        if !d.get_time().is_nan()
+            && let Some(db) = get_db()
+            && let Some(sig) = current_header.get_untracked()
+        {
             let row = EventRow {
                 id: new_id(),
-                topic_id,
-                timestamp: iso,
-                timestamp_ms: ts_ms,
-                lat: None,
-                lon: None,
-                altitude: None,
-                heading: None,
-                speed: None,
-                accuracy: None,
-                altitude_accuracy: None,
+                topic_id: detail_id.get_untracked(),
+                timestamp: d.to_iso_string().as_string().unwrap_or_default(),
+                timestamp_ms: d.get_time(),
+                ..Default::default()
             };
-            if let Some(db) = get_db() {
-                let row2 = row.clone();
-                spawn_local(async move {
-                    let (now_ms, today_start, today_end, month_start, week_start) =
-                        time_boundaries();
-                    let ms = row2.timestamp_ms;
-                    if let Some(sig) = current_header.get_untracked() {
-                        let updated_header = sig.with_untracked(|h| TopicHeader {
-                            count_total: h.count_total + 1,
-                            count_today: h.count_today
-                                + (ms >= today_start && ms < today_end) as u32,
-                            count_week: h.count_week + (ms >= week_start && ms <= now_ms) as u32,
-                            count_month: h.count_month + (ms >= month_start) as u32,
-                            ..h.clone()
-                        });
-                        if add_event_and_update_header_idb(&db, &row2, &updated_header).await {
-                            events.update(|evs| evs.insert(0, row2.clone()));
-                            all_evs.update_value(|v| v.insert(0, row2.clone()));
-                            sig.set(updated_header);
-                        }
-                    }
-                    // Background: enrich with GPS once acquired
-                    if let Some(gps) = get_gps().await {
-                        let enriched = EventRow {
-                            lat: Some(gps.lat),
-                            lon: Some(gps.lon),
-                            altitude: gps.altitude,
-                            heading: gps.heading,
-                            speed: gps.speed,
-                            accuracy: Some(gps.accuracy),
-                            altitude_accuracy: gps.altitude_accuracy,
-                            ..row2
+            spawn_local(async move {
+                record_event(
+                    &db,
+                    row,
+                    sig,
+                    |row| {
+                        events.update(|evs| evs.insert(0, row.clone()));
+                        all_evs.update_value(|v| v.insert(0, row.clone()));
+                    },
+                    |row| {
+                        let replace = |v: &mut Vec<EventRow>| {
+                            if let Some(e) = v.iter_mut().find(|e| e.id == row.id) {
+                                *e = row.clone();
+                            }
                         };
-                        add_event_idb(&db, &enriched).await;
-                    }
-                });
-            }
+                        events.update(replace);
+                        all_evs.update_value(replace);
+                        if event_detail_ev
+                            .with_untracked(|e| e.as_ref().map(|e| &e.id) == Some(&row.id))
+                        {
+                            event_detail_ev.set(Some(row.clone()));
+                        }
+                    },
+                )
+                .await;
+            });
         }
         show_add_modal.set(false);
     };
@@ -420,12 +405,7 @@ pub fn TopicDetail() -> impl IntoView {
                                             delete_event_idb(&db, &eid_val2).await;
                                             if let Some(sig) = current_header.get_untracked() {
                                                 let counts = all_evs.with_value(|v| event_row_counts(v, time_boundaries()));
-                                                sig.update(|h| {
-                                                    h.count_total = counts.3;
-                                                    h.count_today = counts.0;
-                                                    h.count_week  = counts.1;
-                                                    h.count_month = counts.2;
-                                                });
+                                                sig.update(|h| h.set_counts(counts));
                                                 save_topic_header(&db, &sig.get_untracked()).await;
                                             }
                                         });
@@ -436,14 +416,16 @@ pub fn TopicDetail() -> impl IntoView {
                                     eid.with_value(|id| swiped_id.get().as_deref() == Some(id))
                                 };
 
-                                let open_event_detail = {
-                                    let ev_clone = ev.clone();
-                                    move |me: leptos::ev::MouseEvent| {
-                                        me.stop_propagation();
-                                        if !is_swiped() {
-                                            event_detail_ev.set(Some(ev_clone.clone()));
-                                            show_event_detail.set(true);
-                                        }
+                                // Look the row up at click time: <For> is keyed by id, so a
+                                // row later enriched with GPS does not re-run this closure.
+                                let open_event_detail = move |me: leptos::ev::MouseEvent| {
+                                    me.stop_propagation();
+                                    if !is_swiped() {
+                                        let current = eid.with_value(|id| {
+                                            events.with_untracked(|v| v.iter().find(|e| &e.id == id).cloned())
+                                        });
+                                        event_detail_ev.set(current);
+                                        show_event_detail.set(true);
                                     }
                                 };
 
@@ -628,6 +610,16 @@ fn parse_add_param_raw(search: &str) -> Option<&str> {
     None
 }
 
+// ─── Topic signals ────────────────────────────────────────────────────────────
+
+/// Create a topic's signal owned by `owner` (the `App`), not by whichever
+/// reactive scope happens to be current. Inside an event handler that is the
+/// handler's view scope, e.g. the `<Show when=adding>` form, which is disposed
+/// as soon as it hides; the next access to the signal then panics.
+pub(crate) fn new_topic_signal(owner: &Owner, h: TopicHeader) -> RwSignal<TopicHeader> {
+    owner.with(|| RwSignal::new(h))
+}
+
 // ─── Foreground refresh helper ────────────────────────────────────────────────
 
 /// Recompute and persist every topic's counts from its stored events,
@@ -645,7 +637,11 @@ pub(crate) async fn refresh_all_topic_counts(db: &Rexie, topic_list: TopicList) 
 #[component]
 pub fn App() -> impl IntoView {
     let topic_list: TopicList = RwSignal::new(Vec::new());
+    // Copy handle to the App's owner, for creating topic signals from handlers.
+    let app_owner = StoredValue::new_local(Owner::current().expect("App runs inside an owner"));
     let db_ready_signal = RwSignal::new(false);
+    // Set when IndexedDB cannot be opened (e.g. private browsing, blocked storage).
+    let db_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     let (new_name, set_new_name) = signal(String::new());
     let editing = RwSignal::new(false);
@@ -668,7 +664,14 @@ pub fn App() -> impl IntoView {
         });
 
     spawn_local(async move {
-        let db = open_db().await;
+        let db = match open_db().await {
+            Ok(db) => db,
+            Err(e) => {
+                leptos::logging::error!("IndexedDB open failed: {e:?}");
+                db_error.set(Some(e.to_string()));
+                return;
+            }
+        };
         let headers_raw = load_topic_headers(&db).await;
         let mut headers: Vec<TopicHeader> = Vec::new();
         for h in &headers_raw {
@@ -678,29 +681,14 @@ pub fn App() -> impl IntoView {
         // ── Handle ?add=<topic-name> ─────────────────────────────────────────
         if let Some(ref name) = pending_add {
             if let Some(header) = headers.iter_mut().find(|h| &h.name == name) {
-                let ts_ms = js_sys::Date::now();
                 let row = EventRow {
                     id: new_id(),
                     topic_id: header.id.clone(),
                     timestamp: now_timestamp(),
-                    timestamp_ms: ts_ms,
-                    lat: None,
-                    lon: None,
-                    altitude: None,
-                    heading: None,
-                    speed: None,
-                    accuracy: None,
-                    altitude_accuracy: None,
+                    timestamp_ms: js_sys::Date::now(),
+                    ..Default::default()
                 };
-                let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
-                let ms = ts_ms;
-                let updated = TopicHeader {
-                    count_total: header.count_total + 1,
-                    count_today: header.count_today + (ms >= today_start && ms < today_end) as u32,
-                    count_week: header.count_week + (ms >= week_start && ms <= now_ms) as u32,
-                    count_month: header.count_month + (ms >= month_start) as u32,
-                    ..header.clone()
-                };
+                let updated = with_added_event(header, row.timestamp_ms, time_boundaries());
                 if add_event_and_update_header_idb(&db, &row, &updated).await {
                     *header = updated;
                 }
@@ -715,12 +703,16 @@ pub fn App() -> impl IntoView {
         }
 
         DB.with(|cell| *cell.borrow_mut() = Some(std::rc::Rc::new(db)));
-        topic_list.set(headers.into_iter().map(RwSignal::new).collect());
+        topic_list.set(
+            headers
+                .into_iter()
+                .map(|h| app_owner.with_value(|o| new_topic_signal(o, h)))
+                .collect(),
+        );
         db_ready_signal.set(true);
     });
 
     provide_context(topic_list);
-    provide_context(DbReady(db_ready_signal));
     provide_context(Editing(editing));
     provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
@@ -729,7 +721,7 @@ pub fn App() -> impl IntoView {
 
     // ── Foreground detection: refresh counts when a new day has started ───────
     {
-        let last_today_start = StoredValue::new(time_boundaries().1);
+        let last_today_start = StoredValue::new(time_boundaries().today_start);
         let doc = web_sys::window().unwrap().document().unwrap();
         let doc2 = doc.clone(); // moved into the closure
 
@@ -737,7 +729,7 @@ pub fn App() -> impl IntoView {
             if doc2.hidden() {
                 return; // fired while going to background — nothing to do
             }
-            let new_ts = time_boundaries().1;
+            let new_ts = time_boundaries().today_start;
             if new_ts == last_today_start.get_value() {
                 return; // same day, counts are still valid
             }
@@ -800,12 +792,7 @@ pub fn App() -> impl IntoView {
                         }
                     }
                     let counts = event_row_counts(&all, time_boundaries());
-                    sig.update(|h| {
-                        h.count_total = counts.3;
-                        h.count_today = counts.0;
-                        h.count_week = counts.1;
-                        h.count_month = counts.2;
-                    });
+                    sig.update(|h| h.set_counts(counts));
                     save_topic_header(&db, &sig.get_untracked()).await;
                 });
             } else {
@@ -821,20 +808,13 @@ pub fn App() -> impl IntoView {
                             r
                         })
                         .collect();
-                    let counts = event_row_counts(&rows_with_topic, time_boundaries());
-                    let header = TopicHeader {
-                        id: tid2.clone(),
-                        name: name2,
-                        count_total: counts.3,
-                        count_today: counts.0,
-                        count_week: counts.1,
-                        count_month: counts.2,
-                    };
+                    let mut header = TopicHeader::new(tid2.clone(), name2);
+                    header.set_counts(event_row_counts(&rows_with_topic, time_boundaries()));
                     save_topic_header(&db, &header).await;
                     for row in rows_with_topic {
                         add_event_idb(&db, &row).await;
                     }
-                    let header_sig = RwSignal::new(header);
+                    let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
                     topic_list.update(|rows| rows.push(header_sig));
                 });
             }
@@ -902,12 +882,7 @@ pub fn App() -> impl IntoView {
                             }
                         }
                         let counts = event_row_counts(&all, time_boundaries());
-                        sig.update(|h| {
-                            h.count_total = counts.3;
-                            h.count_today = counts.0;
-                            h.count_week = counts.1;
-                            h.count_month = counts.2;
-                        });
+                        sig.update(|h| h.set_counts(counts));
                         save_topic_header(&db, &sig.get_untracked()).await;
                     } else {
                         // Create new topic
@@ -921,20 +896,13 @@ pub fn App() -> impl IntoView {
                                 r
                             })
                             .collect();
-                        let counts = event_row_counts(&rows_with_topic, time_boundaries());
-                        let header = TopicHeader {
-                            id: topic_id,
-                            name: topic_export.name,
-                            count_total: counts.3,
-                            count_today: counts.0,
-                            count_week: counts.1,
-                            count_month: counts.2,
-                        };
+                        let mut header = TopicHeader::new(topic_id, topic_export.name);
+                        header.set_counts(event_row_counts(&rows_with_topic, time_boundaries()));
                         save_topic_header(&db, &header).await;
                         for row in &rows_with_topic {
                             add_event_idb(&db, row).await;
                         }
-                        let header_sig = RwSignal::new(header);
+                        let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
                         topic_list.update(|rows| rows.push(header_sig));
                     }
                 }
@@ -953,21 +921,15 @@ pub fn App() -> impl IntoView {
         if name.is_empty() {
             return;
         }
-        let header = TopicHeader {
-            id: new_id(),
-            name,
-            count_total: 0,
-            count_today: 0,
-            count_week: 0,
-            count_month: 0,
-        };
+        let header = TopicHeader::new(new_id(), name);
         if let Some(db) = get_db() {
             let h2 = header.clone();
             spawn_local(async move {
                 save_topic_header(&db, &h2).await;
             });
         }
-        topic_list.update(|rows| rows.push(RwSignal::new(header)));
+        let sig = app_owner.with_value(|o| new_topic_signal(o, header));
+        topic_list.update(|rows| rows.push(sig));
         set_new_name.set(String::new());
         adding.set(false);
     };
@@ -1036,8 +998,15 @@ pub fn App() -> impl IntoView {
                 </header>
                 <main class="app-main">
                     <div class="topic-list">
-                        <Show when=move || !db_ready_signal.get()>
+                        <Show when=move || !db_ready_signal.get() && db_error.with(Option::is_none)>
                             <div class="loading-indicator">"Loading…"</div>
+                        </Show>
+                        <Show when=move || db_error.with(Option::is_some)>
+                            <div class="empty-state db-error">
+                                <p>"Storage unavailable."</p>
+                                <p>"trackit needs IndexedDB, which this browser has blocked (private mode?)."</p>
+                                <p class="db-error-detail">{move || db_error.get().unwrap_or_default()}</p>
+                            </div>
                         </Show>
                         <Show when=move || db_ready_signal.get() && topic_list.get().is_empty()>
                             <div class="empty-state">
@@ -1086,7 +1055,7 @@ mod tests {
     /// counts with the values recomputed from the stored events.
     #[wasm_bindgen_test]
     async fn refresh_all_counts_corrects_stale_signal() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
 
         let topic_id = new_id();
         let header = TopicHeader {
@@ -1104,13 +1073,7 @@ mod tests {
             topic_id: topic_id.clone(),
             timestamp: now_timestamp(),
             timestamp_ms: js_sys::Date::now(),
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            ..Default::default()
         };
         add_event_idb(&db, &row).await;
 
@@ -1122,6 +1085,24 @@ mod tests {
         let h = sig.get_untracked();
         assert_eq!(h.count_total, 1, "total should be 1 after refresh");
         assert_ne!(h.count_today, 99, "today should not be stale 99");
+    }
+
+    /// A topic added from the `<Show when=adding>` form must survive that
+    /// form's scope being disposed when the form hides.
+    #[wasm_bindgen_test]
+    fn topic_signal_outlives_disposed_handler_scope() {
+        let app = Owner::new();
+        let sig = app.with(|| {
+            let form_scope = Owner::new();
+            let sig = form_scope
+                .with(|| new_topic_signal(&app, TopicHeader::new("t".into(), "Running".into())));
+            form_scope.cleanup();
+            sig
+        });
+        assert!(
+            sig.try_get_untracked().is_some(),
+            "topic signal was disposed with the handler scope"
+        );
     }
 
     #[test]

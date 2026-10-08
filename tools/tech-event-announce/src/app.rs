@@ -122,6 +122,28 @@ pub fn App() -> impl IntoView {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum CopyState {
+    Idle,
+    Copied,
+    Failed,
+}
+
+/// Write `text` to the clipboard; `false` if the browser refused or has no
+/// Clipboard API (it is `undefined` outside secure contexts).
+async fn write_clipboard(text: &str) -> bool {
+    let Some(window) = web_sys::window() else {
+        return false;
+    };
+    let nav = window.navigator();
+    let has_clipboard = js_sys::Reflect::get(&nav, &JsValue::from_str("clipboard"))
+        .is_ok_and(|v| !v.is_undefined());
+    has_clipboard
+        && JsFuture::from(nav.clipboard().write_text(text))
+            .await
+            .is_ok()
+}
+
 #[component]
 fn OutputCard(
     title: &'static str,
@@ -130,24 +152,26 @@ fn OutputCard(
     #[prop(optional)] char_limit: Option<u32>,
     #[prop(optional)] char_count: Option<fn(&str) -> usize>,
 ) -> impl IntoView {
-    let copied = RwSignal::new(false);
+    let copy_state = RwSignal::new(CopyState::Idle);
     let count_fn = char_count.unwrap_or(templates::grapheme_count);
 
     let on_copy = move |_| {
         let t = text.get_untracked();
-        copied.set(true);
         spawn_local(async move {
+            copy_state.set(if write_clipboard(&t).await {
+                CopyState::Copied
+            } else {
+                CopyState::Failed
+            });
+            // Reset the label after 1.5 s using a setTimeout Promise.
             if let Some(window) = web_sys::window() {
-                let clipboard = window.navigator().clipboard();
-                let _ = JsFuture::from(clipboard.write_text(&t)).await;
-                // Reset the "Kopiert!" label after 1.5 s using a setTimeout Promise.
                 let promise = js_sys::Promise::new(&mut |resolve, _| {
                     let _ = window
                         .set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 1500);
                 });
                 let _ = JsFuture::from(promise).await;
             }
-            copied.set(false);
+            copy_state.set(CopyState::Idle);
         });
     };
 
@@ -169,11 +193,19 @@ fn OutputCard(
                     })}
                 </div>
                 <button
-                    class=move || if copied.get() { "btn-copy copied" } else { "btn-copy" }
+                    class=move || match copy_state.get() {
+                        CopyState::Idle => "btn-copy",
+                        CopyState::Copied => "btn-copy copied",
+                        CopyState::Failed => "btn-copy copy-failed",
+                    }
                     disabled=move || !enabled.get()
                     on:click=on_copy
                 >
-                    {move || if copied.get() { "Kopiert!" } else { "Kopieren" }}
+                    {move || match copy_state.get() {
+                        CopyState::Idle => "Kopieren",
+                        CopyState::Copied => "Kopiert!",
+                        CopyState::Failed => "Fehler",
+                    }}
                 </button>
             </div>
             <textarea

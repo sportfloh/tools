@@ -52,7 +52,7 @@ cargo test --lib
 cd tools/trackit && wasm-pack test --headless --chrome
 ```
 
-### Current coverage (31 native + 22 WASM tests)
+### Current coverage (36 native + 26 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -63,6 +63,11 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `event_before_month_start_only_in_total` | native | `time.rs` | event before month start only hits total |
 | `mixed_events_correct_counts` | native | `time.rs` | combination of all boundary cases |
 | `stale_boundaries_miscount_crossed_day` | native | `time.rs` | same event counted as today yesterday is NOT today with current bounds |
+| `topic_header_counts_round_trip` | native | `time.rs` | `TopicHeader::counts` / `set_counts` map to the four `count_*` fields |
+| `with_added_event_now_bumps_every_period` | native | `time.rs` | an event at now bumps today, week, month and total |
+| `with_added_event_yesterday_skips_today` | native | `time.rs` | a 24 h old event bumps week, month, total but not today |
+| `with_added_event_future_counts_month_but_not_week` | native | `time.rs` | a future event (manual add) is outside the rolling week but in the month |
+| `with_added_event_keeps_identity` | native | `time.rs` | id and name are carried over unchanged |
 | `topic_header_serde_round_trip` | native | `time.rs` | `TopicHeader` serialises and deserialises correctly |
 | `event_row_serde_round_trip` | native | `time.rs` | `EventRow` serialises and deserialises correctly |
 | `bulk_export_serde_round_trip` | native | `time.rs` | `BulkExport` + `TopicExport` round-trip through JSON |
@@ -108,6 +113,10 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
 | `idb_refresh_topic_counts` | WASM | `db.rs` | `refresh_topic_counts_idb` replaces stale counts with correct recomputed values |
 | `idb_add_event_and_update_header_atomic` | WASM | `db.rs` | event and header written atomically; both present in IDB after success |
+| `idb_enrich_does_not_resurrect_deleted_event` | WASM | `db.rs` | GPS enrichment of an event deleted meanwhile writes nothing |
+| `idb_enrich_updates_existing_event` | WASM | `db.rs` | GPS enrichment overwrites an existing event in place |
+| `idb_open_failure_returns_err` | WASM | `db.rs` | a rejected IDB open (version downgrade) returns `Err` instead of panicking |
+| `topic_signal_outlives_disposed_handler_scope` | WASM | `app.rs` | `new_topic_signal` survives disposal of the scope it was created in |
 | `refresh_all_counts_corrects_stale_signal` | WASM | `app.rs` | `refresh_all_topic_counts` updates stale Leptos signals to match recomputed IDB counts |
 
 ## TDD Workflow
@@ -167,7 +176,7 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 `Trunk.toml`, then add `"tools/<name>"` to the `members` list in the root
 `Cargo.toml`.
 
-## Source modules (trackit)
+## Source modules
 
 | File | Purpose |
 |------|---------|
@@ -176,6 +185,9 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | `tools/trackit/src/db.rs` | IndexedDB access via `rexie` |
 | `tools/trackit/src/time.rs` | Timestamp helpers, count computation, import/export |
 | `tools/trackit/src/lib.rs` | Re-exports for the `trackitlib` rlib crate |
+| `tools/tech-event-announce/src/app.rs` | Form + output cards (copy to clipboard, Mastodon char counter) |
+| `tools/tech-event-announce/src/templates.rs` | Pure text templates (chat, e-mail, Mastodon) and grapheme / Mastodon counting |
+| `tools/{trackit,tech-event-announce}/public/service-worker.js` | Offline cache, one per tool; caches are prefixed with the tool name |
 
 ## Key dependencies
 
@@ -213,13 +225,17 @@ Two IDB stores:
 - `topics` — keyed by `id`, holds `TopicHeader` (name + pre-computed counts)
 - `events` — keyed by `id`, indexed by `topic_id` via `by_topic`, holds `EventRow`
 
-Counts (today / week / month / total) are stored **denormalized** in `TopicHeader` and recomputed from `EventRow` timestamps whenever events are added, deleted, or imported.
+Counts (today / week / month / total) are stored **denormalized** in `TopicHeader` and recomputed from `EventRow` timestamps whenever events are added, deleted, or imported. `time_boundaries()` returns a `Bounds` struct, `event_row_counts()` a `Counts` struct; a single new event is applied with `with_added_event()`.
+
+Logging an event (`record_event` in `app.rs`) writes the event and the bumped header in one transaction, then attaches a GPS fix in the background via `enrich_event_idb`, which only writes if the event still exists (it may have been deleted while waiting for the fix).
 
 ### Reactive model
 
 Leptos signals are the only state:
 - `TopicList` = `RwSignal<Vec<RwSignal<TopicHeader>>>` — outer signal changes on add/remove, inner signals change when counts change (avoids full list re-renders)
-- Four newtype-wrapped `RwSignal<bool>` passed via Leptos context: `Editing`, `ShowDetail`, `ShowEventDetail`, `DbReady`
+- Three newtype-wrapped `RwSignal<bool>` passed via Leptos context: `Editing`, `ShowDetail`, `ShowEventDetail`
+- `App` keeps `db_ready: RwSignal<bool>` and `db_error: RwSignal<Option<String>>` locally; `open_db()` returns `Result` and a failure renders a "Storage unavailable" message
+- Topic signals are created only via `new_topic_signal(&app_owner, h)` so they are owned by `App` (see Gotchas)
 - `RwSignal<Option<EventRow>>` in context holds the event currently open in the event detail screen
 
 IDB calls always happen inside `spawn_local` (async on the WASM event loop).
@@ -238,8 +254,8 @@ The app reads the `?add=<topic-name>` query parameter **once on startup** (synch
 
 Use with Apple Shortcuts via the **"Open URLs"** action:
 ```
-https://<host>/tools/?add=Running
-https://<host>/tools/?add=Morning%20Run   ← spaces as %20
+https://<host>/tools/trackit/?add=Running
+https://<host>/tools/trackit/?add=Morning%20Run   ← spaces as %20
 ```
 On iOS 16.4+ the PWA opens as a standalone app; the event is recorded immediately and the updated count is visible in the topic list. On older iOS versions the URL opens in Safari instead.
 
@@ -316,6 +332,14 @@ Rules:
   `--chromedriver /opt/claude-tools/bin/chromedriver`.
 - **trunk via cargo-binstall** falls back to a source build that fails to compile
   `lightningcss`; the hook downloads the release tarball instead.
+- **Signals created in event handlers die with the handler's view scope.** A `RwSignal` created
+  inside e.g. a `<Show>`-wrapped form's submit handler is owned by that scope and disposed when the
+  `<Show>` hides; the next access panics (`unreachable` in release builds). Create long-lived
+  signals under the `App` owner (`new_topic_signal`).
+- **`<For>` children don't re-run when a row with the same key changes.** Closures inside them must
+  look up current data (by id) at call time rather than capture the row.
+- **Service-worker caches are per origin**, shared by all tools on GitHub Pages. Each SW must only
+  delete caches with its own prefix (`trackit-`, `tech-event-announce-`).
 - **`weave setup`** rewrites `.gitattributes` with its full pattern list; only run it when
   deliberately upgrading weave. The hook only sets the driver in `.git/config`.
 
