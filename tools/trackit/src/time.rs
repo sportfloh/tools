@@ -210,6 +210,106 @@ pub(crate) fn sort_topics(headers: &mut [TopicHeader]) {
     });
 }
 
+// ─── Statistics ───────────────────────────────────────────────────────────────
+
+/// Local midnights (epoch ms) of the last `n` days, oldest first, ending
+/// with today. Built from calendar dates, so DST days are 23 / 25 h long.
+pub(crate) fn day_starts(n: usize) -> Vec<f64> {
+    local_midnights(n, 1, 0)
+}
+
+/// Local Monday midnights of the last `n` weeks, oldest first, ending with
+/// the current week.
+pub(crate) fn week_starts(n: usize) -> Vec<f64> {
+    // getDay(): 0 = Sunday … 6 = Saturday → days since Monday.
+    let since_monday = (js_sys::Date::new_0().get_day() as i32 + 6) % 7;
+    local_midnights(n, 7, since_monday)
+}
+
+/// `n` local midnights spaced `step_days` apart, oldest first; the newest is
+/// `back_days` before today. JS normalises day-of-month overflow (e.g. day 0 or
+/// -5) into the right month, and local midnights follow DST.
+fn local_midnights(n: usize, step_days: i32, back_days: i32) -> Vec<f64> {
+    let now = js_sys::Date::new_0();
+    let (y, m, d) = (
+        now.get_full_year(),
+        now.get_month() as i32,
+        now.get_date() as i32,
+    );
+    (0..n as i32)
+        .rev()
+        .map(|i| {
+            js_sys::Date::new_with_year_month_day(y, m, d - back_days - i * step_days).get_time()
+        })
+        .collect()
+}
+
+/// Short local date label for chart bars, e.g. "Mon 6 Oct".
+pub(crate) fn short_day_label(ms: f64) -> String {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let d = js_sys::Date::new(&JsValue::from_f64(ms));
+    format!(
+        "{} {} {}",
+        DAYS[d.get_day() as usize],
+        d.get_date(),
+        MONTHS[d.get_month() as usize]
+    )
+}
+
+/// Count `timestamps` into buckets: bucket `i` covers `[starts[i], starts[i+1])`,
+/// the last one `[starts[last], end)`. Timestamps outside are ignored.
+/// `starts` must be ascending.
+pub(crate) fn bucket_counts(timestamps: &[f64], starts: &[f64], end: f64) -> Vec<u32> {
+    let mut counts = vec![0; starts.len()];
+    for &t in timestamps {
+        if starts.first().is_none_or(|&first| t < first) || t >= end {
+            continue;
+        }
+        // Index of the last start <= t.
+        let idx = starts.partition_point(|&s| s <= t) - 1;
+        counts[idx] += 1;
+    }
+    counts
+}
+
+/// Mean time between consecutive events, `None` with fewer than two events.
+pub(crate) fn average_interval_ms(timestamps: &[f64]) -> Option<f64> {
+    if timestamps.len() < 2 {
+        return None;
+    }
+    let min = timestamps.iter().copied().fold(f64::INFINITY, f64::min);
+    let max = timestamps.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    Some((max - min) / (timestamps.len() - 1) as f64)
+}
+
+/// Human-readable interval: "every 12 min", "every 5 h", "every 2.3 days",
+/// "every 3 weeks".
+pub(crate) fn format_interval(ms: f64) -> String {
+    const MIN: f64 = 60_000.0;
+    const HOUR: f64 = 60.0 * MIN;
+    const DAY: f64 = 24.0 * HOUR;
+    let unit = |n: f64, one: &str, many: &str| {
+        if n <= 1.0 {
+            format!("every {one}")
+        } else {
+            format!("every {n} {many}")
+        }
+    };
+    if ms < 59.5 * MIN {
+        unit((ms / MIN).round(), "minute", "min")
+    } else if ms < 23.5 * HOUR {
+        unit((ms / HOUR).round(), "hour", "h")
+    } else if ms < 13.95 * DAY {
+        // One decimal, without a trailing ".0".
+        unit((ms / DAY * 10.0).round() / 10.0, "day", "days")
+    } else {
+        unit((ms / (7.0 * DAY)).round(), "week", "weeks")
+    }
+}
+
 pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
     let line = line.trim();
     if line.is_empty() {
@@ -340,9 +440,9 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bounds, BulkExport, Counts, Direction, NameError, TopicExport, event_row_counts,
-        merge_new_events, move_item, parse_bulk_import, sort_topics, validate_topic_name,
-        with_added_event,
+        Bounds, BulkExport, Counts, Direction, NameError, TopicExport, average_interval_ms,
+        bucket_counts, event_row_counts, format_interval, merge_new_events, move_item,
+        parse_bulk_import, sort_topics, validate_topic_name, with_added_event,
     };
     use crate::db::{EventRow, TopicHeader};
 
@@ -654,6 +754,54 @@ mod tests {
         assert_eq!(names, ["Run", "Yoga", "Bike", "Swim"]);
     }
 
+    const H: f64 = 3_600_000.0;
+    const D: f64 = 24.0 * H;
+
+    #[test]
+    fn bucket_counts_assigns_by_half_open_ranges() {
+        let starts = [0.0, D, 2.0 * D];
+        let ts = [
+            0.0,         // first instant of bucket 0
+            D - 1.0,     // last instant of bucket 0
+            D,           // first instant of bucket 1
+            2.0 * D + H, // bucket 2
+            2.0 * D + H, // bucket 2 again
+        ];
+        assert_eq!(bucket_counts(&ts, &starts, 3.0 * D), [2, 1, 2]);
+    }
+
+    #[test]
+    fn bucket_counts_ignores_out_of_range() {
+        let starts = [D, 2.0 * D];
+        let ts = [D - 1.0, 3.0 * D, 3.0 * D + 5.0];
+        assert_eq!(bucket_counts(&ts, &starts, 3.0 * D), [0, 0]);
+    }
+
+    #[test]
+    fn average_interval_needs_two_events() {
+        assert_eq!(average_interval_ms(&[]), None);
+        assert_eq!(average_interval_ms(&[5.0]), None);
+    }
+
+    #[test]
+    fn average_interval_is_span_over_gaps() {
+        // Order does not matter; 3 gaps over a 6-day span → 2 days.
+        assert_eq!(
+            average_interval_ms(&[6.0 * D, 0.0, 1.0 * D, 2.0 * D]),
+            Some(2.0 * D)
+        );
+    }
+
+    #[test]
+    fn format_interval_picks_a_readable_unit() {
+        assert_eq!(format_interval(12.0 * 60_000.0), "every 12 min");
+        assert_eq!(format_interval(5.0 * H), "every 5 h");
+        assert_eq!(format_interval(2.3 * D), "every 2.3 days");
+        assert_eq!(format_interval(1.0 * D), "every day");
+        assert_eq!(format_interval(21.0 * D), "every 3 weeks");
+        assert_eq!(format_interval(20.0 * 1000.0), "every minute");
+    }
+
     #[test]
     fn parse_bulk_import_rejects_unknown_version() {
         let json = r#"{"version":2,"topics":[{"id":"t1","name":"Running","events":[]}]}"#;
@@ -687,8 +835,8 @@ mod tests {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        export_topic, format_timestamp, new_id, now_local_datetime_str, now_timestamp,
-        parse_import_line, time_boundaries,
+        day_starts, export_topic, format_timestamp, new_id, now_local_datetime_str, now_timestamp,
+        parse_import_line, short_day_label, time_boundaries, week_starts,
     };
     use crate::db::EventRow;
     use wasm_bindgen_test::*;
@@ -814,5 +962,45 @@ mod wasm_tests {
             ..Default::default()
         };
         export_topic("smoke-test-2", &[ev]);
+    }
+
+    fn assert_steps(starts: &[f64], n: usize, min_gap_h: f64, max_gap_h: f64) {
+        assert_eq!(starts.len(), n);
+        assert!(*starts.last().unwrap() <= js_sys::Date::now());
+        for w in starts.windows(2) {
+            let gap_h = (w[1] - w[0]) / 3_600_000.0;
+            assert!((min_gap_h..=max_gap_h).contains(&gap_h), "gap {gap_h} h");
+        }
+        for &s in starts {
+            let d = js_sys::Date::new(&s.into());
+            assert_eq!((d.get_hours(), d.get_minutes(), d.get_seconds()), (0, 0, 0));
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn day_starts_are_consecutive_local_midnights() {
+        let starts = day_starts(30);
+        assert_steps(&starts, 30, 23.0, 25.0);
+        // The last one is today's midnight.
+        assert_eq!(starts[29], time_boundaries().today_start);
+    }
+
+    #[wasm_bindgen_test]
+    fn week_starts_are_consecutive_mondays() {
+        let starts = week_starts(12);
+        assert_steps(&starts, 12, 7.0 * 24.0 - 1.0, 7.0 * 24.0 + 1.0);
+        for &s in &starts {
+            assert_eq!(js_sys::Date::new(&s.into()).get_day(), 1, "not a Monday");
+        }
+        // The current week contains now.
+        let now = js_sys::Date::now();
+        assert!(starts[11] <= now && now < starts[11] + 7.0 * 86_400_000.0 + 3_600_000.0);
+    }
+
+    #[wasm_bindgen_test]
+    fn short_day_label_formats_local_date() {
+        // Month is 0-based: 9 = October. 5 Oct 2026 is a Monday.
+        let ms = js_sys::Date::new_with_year_month_day(2026, 9, 5).get_time();
+        assert_eq!(short_day_label(ms), "Mon 5 Oct");
     }
 }
