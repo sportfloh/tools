@@ -1,3 +1,4 @@
+use futures::future::join_all;
 use rexie::{Index, KeyRange, ObjectStore, Rexie, TransactionMode};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
@@ -290,13 +291,18 @@ pub(crate) async fn add_events_bulk_idb(db: &Rexie, rows: &[EventRow]) -> bool {
         Ok(s) => s,
         Err(_) => return false,
     };
-    for row in rows {
-        let Ok(val) = serde_wasm_bindgen::to_value(row) else {
-            return false;
-        };
-        if store.put(&val, None).await.is_err() {
-            return false;
-        }
+    let Ok(vals) = rows
+        .iter()
+        .map(serde_wasm_bindgen::to_value)
+        .collect::<Result<Vec<_>, _>>()
+    else {
+        return false;
+    };
+    // Issue every put at once; IndexedDB queues them in this transaction.
+    // Awaiting each one before the next made big imports take seconds.
+    let results = join_all(vals.iter().map(|v| store.put(v, None))).await;
+    if results.iter().any(Result::is_err) {
+        return false;
     }
     tx.done().await.is_ok()
 }
@@ -414,17 +420,15 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
         Ok(t) => t,
         Err(_) => return,
     };
-    // Delete all events for this topic
+    // Delete all events for this topic: fetch only their primary keys (no
+    // deserialization) and issue all deletes at once in this transaction
+    // instead of waiting for each one in turn.
     if let Ok(ev_store) = tx.store("events")
         && let Ok(index) = ev_store.index("by_topic")
     {
         let key_range = KeyRange::only(&JsValue::from_str(topic_id)).ok();
-        if let Ok(records) = index.get_all(key_range, None).await {
-            for v in records {
-                if let Ok(row) = serde_wasm_bindgen::from_value::<EventRow>(v) {
-                    ev_store.delete(JsValue::from_str(&row.id)).await.ok();
-                }
-            }
+        if let Ok(keys) = index.get_all_keys(key_range, None).await {
+            join_all(keys.into_iter().map(|k| ev_store.delete(k))).await;
         }
     }
     if let Ok(t_store) = tx.store("topics") {
@@ -933,5 +937,28 @@ mod wasm_tests {
         .await
         .expect("count read");
         assert_eq!((counts[0].today, counts[0].total), (2, 2));
+    }
+
+    // IDB: deleting a big topic removes all its events and nothing else
+    #[wasm_bindgen_test]
+    async fn idb_delete_topic_with_many_events() {
+        let db = open_db().await.unwrap();
+        save_topic_header(&db, &test_header("topic-big-del", "Big")).await;
+        let rows: Vec<EventRow> = (0..2000)
+            .map(|i| test_event(&format!("big-del-{i}"), "topic-big-del", i as f64))
+            .collect();
+        assert!(add_events_bulk_idb(&db, &rows).await);
+        add_event_idb(&db, &test_event("big-keep-1", "topic-big-keep", 1.0)).await;
+
+        delete_topic_idb(&db, "topic-big-del").await;
+
+        assert!(load_events_for_topic(&db, "topic-big-del").await.is_empty());
+        assert!(
+            !load_topic_headers(&db)
+                .await
+                .iter()
+                .any(|h| h.id == "topic-big-del")
+        );
+        assert_eq!(load_events_for_topic(&db, "topic-big-keep").await.len(), 1);
     }
 }
