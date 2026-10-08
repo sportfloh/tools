@@ -44,7 +44,51 @@ pub(crate) fn new_id() -> String {
     format!("{}-{}", ts, rand)
 }
 
-pub(crate) fn time_boundaries() -> (f64, f64, f64, f64, f64) {
+/// Period boundaries (epoch ms) used to bucket events into today / week / month.
+/// `week_start` is a rolling 7-day window; `month_start` is the calendar month.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Bounds {
+    pub now: f64,
+    pub today_start: f64,
+    pub today_end: f64,
+    pub month_start: f64,
+    pub week_start: f64,
+}
+
+/// Per-period event counts, as stored denormalized in `TopicHeader`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) struct Counts {
+    pub today: u32,
+    pub week: u32,
+    pub month: u32,
+    pub total: u32,
+}
+
+impl Counts {
+    /// Contribution of a single event at `ms` under `b`.
+    fn of_event(ms: f64, b: Bounds) -> Self {
+        Counts {
+            today: (ms >= b.today_start && ms < b.today_end) as u32,
+            week: (ms >= b.week_start && ms <= b.now) as u32,
+            month: (ms >= b.month_start) as u32,
+            total: 1,
+        }
+    }
+}
+
+impl std::ops::Add for Counts {
+    type Output = Counts;
+    fn add(self, o: Counts) -> Counts {
+        Counts {
+            today: self.today + o.today,
+            week: self.week + o.week,
+            month: self.month + o.month,
+            total: self.total + o.total,
+        }
+    }
+}
+
+pub(crate) fn time_boundaries() -> Bounds {
     let now = js_sys::Date::new_0();
     let now_ms = now.get_time();
     let (cy, cm, cd) = (now.get_full_year(), now.get_month() + 1, now.get_date());
@@ -53,26 +97,28 @@ pub(crate) fn time_boundaries() -> (f64, f64, f64, f64, f64) {
         cy, cm, cd
     )))
     .get_time();
-    let today_end = today_start + 86_400_000.0;
     let month_start =
         js_sys::Date::new(&JsValue::from_str(&format!("{}-{:02}-01T00:00:00", cy, cm))).get_time();
-    let week_start = now_ms - 7.0 * 86_400_000.0;
-    (now_ms, today_start, today_end, month_start, week_start)
+    Bounds {
+        now: now_ms,
+        today_start,
+        today_end: today_start + 86_400_000.0,
+        month_start,
+        week_start: now_ms - 7.0 * 86_400_000.0,
+    }
 }
 
-pub(crate) fn event_row_counts(
-    events: &[EventRow],
-    (now_ms, today_start, today_end, month_start, week_start): (f64, f64, f64, f64, f64),
-) -> (u32, u32, u32, u32) {
-    let (t, w, m) = events.iter().fold((0u32, 0u32, 0u32), |(t, w, m), ev| {
-        let ms = ev.timestamp_ms;
-        (
-            t + (ms >= today_start && ms < today_end) as u32,
-            w + (ms >= week_start && ms <= now_ms) as u32,
-            m + (ms >= month_start) as u32,
-        )
-    });
-    (t, w, m, events.len() as u32)
+pub(crate) fn event_row_counts(events: &[EventRow], b: Bounds) -> Counts {
+    events.iter().fold(Counts::default(), |acc, ev| {
+        acc + Counts::of_event(ev.timestamp_ms, b)
+    })
+}
+
+/// `h` with its counts bumped for one newly logged event at `ms`.
+pub(crate) fn with_added_event(h: &TopicHeader, ms: f64, b: Bounds) -> TopicHeader {
+    let mut updated = h.clone();
+    updated.set_counts(h.counts() + Counts::of_event(ms, b));
+    updated
 }
 
 pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
@@ -95,13 +141,7 @@ pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
         topic_id: String::new(), // filled by caller
         timestamp: d.to_iso_string().as_string()?,
         timestamp_ms: ts_ms,
-        lat: None,
-        lon: None,
-        altitude: None,
-        heading: None,
-        speed: None,
-        accuracy: None,
-        altitude_accuracy: None,
+        ..Default::default()
     })
 }
 
@@ -204,8 +244,10 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 // bounds tuple manually with known epoch-millisecond values.
 #[cfg(test)]
 mod tests {
-    use super::event_row_counts;
-    use super::{BulkExport, TopicExport, parse_bulk_import};
+    use super::{
+        Bounds, BulkExport, Counts, TopicExport, event_row_counts, parse_bulk_import,
+        with_added_event,
+    };
     use crate::db::{EventRow, TopicHeader};
 
     // 2023-11-15 12:00:00 UTC  →  1_700_046_000_000 ms since epoch
@@ -218,8 +260,23 @@ mod tests {
     // 2023-11-01 00:00:00 UTC
     const MONTH_START: f64 = 1_698_796_800_000.0;
 
-    fn bounds() -> (f64, f64, f64, f64, f64) {
-        (NOW, TODAY_START, TODAY_END, MONTH_START, WEEK_START)
+    fn bounds() -> Bounds {
+        Bounds {
+            now: NOW,
+            today_start: TODAY_START,
+            today_end: TODAY_END,
+            month_start: MONTH_START,
+            week_start: WEEK_START,
+        }
+    }
+
+    fn counts(today: u32, week: u32, month: u32, total: u32) -> Counts {
+        Counts {
+            today,
+            week,
+            month,
+            total,
+        }
     }
 
     fn ev(ts_ms: f64) -> EventRow {
@@ -228,64 +285,41 @@ mod tests {
             topic_id: "t".into(),
             timestamp: "".into(),
             timestamp_ms: ts_ms,
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            ..Default::default()
         }
     }
 
     #[test]
     fn empty_events_all_zero() {
-        let (today, week, month, total) = event_row_counts(&[], bounds());
-        assert_eq!((today, week, month, total), (0, 0, 0, 0));
+        assert_eq!(event_row_counts(&[], bounds()), Counts::default());
     }
 
     #[test]
     fn event_in_today_counts_all_periods() {
         // An event timestamped at noon today is inside today, week, and month.
         let events = vec![ev(NOW)];
-        let (today, week, month, total) = event_row_counts(&events, bounds());
-        assert_eq!(today, 1);
-        assert_eq!(week, 1);
-        assert_eq!(month, 1);
-        assert_eq!(total, 1);
+        assert_eq!(event_row_counts(&events, bounds()), counts(1, 1, 1, 1));
     }
 
     #[test]
     fn event_yesterday_not_today_but_in_week_and_month() {
         let yesterday = NOW - 86_400_000.0; // 24 h ago, inside 7-day window
         let events = vec![ev(yesterday)];
-        let (today, week, month, total) = event_row_counts(&events, bounds());
-        assert_eq!(today, 0);
-        assert_eq!(week, 1);
-        assert_eq!(month, 1);
-        assert_eq!(total, 1);
+        assert_eq!(event_row_counts(&events, bounds()), counts(0, 1, 1, 1));
     }
 
     #[test]
     fn event_eight_days_ago_only_in_month() {
         let old = NOW - 8.0 * 86_400_000.0; // outside 7-day window, inside month
         let events = vec![ev(old)];
-        let (today, week, month, total) = event_row_counts(&events, bounds());
-        assert_eq!(today, 0);
-        assert_eq!(week, 0);
-        assert_eq!(month, 1);
-        assert_eq!(total, 1);
+        assert_eq!(event_row_counts(&events, bounds()), counts(0, 0, 1, 1));
     }
 
     #[test]
     fn event_before_month_start_only_in_total() {
         let ancient = MONTH_START - 1.0;
         let events = vec![ev(ancient)];
-        let (today, week, month, total) = event_row_counts(&events, bounds());
-        assert_eq!(today, 0);
-        assert_eq!(week, 0);
-        assert_eq!(month, 0);
-        assert_eq!(total, 1);
+        assert_eq!(event_row_counts(&events, bounds()), counts(0, 0, 0, 1));
     }
 
     #[test]
@@ -296,11 +330,7 @@ mod tests {
             ev(NOW - 8.0 * 86_400_000.0), // month only
             ev(MONTH_START - 1.0),        // none
         ];
-        let (today, week, month, total) = event_row_counts(&events, bounds());
-        assert_eq!(today, 1);
-        assert_eq!(week, 2);
-        assert_eq!(month, 3);
-        assert_eq!(total, 4);
+        assert_eq!(event_row_counts(&events, bounds()), counts(1, 2, 3, 4));
     }
 
     #[test]
@@ -310,25 +340,77 @@ mod tests {
         let events = vec![ev(event_ts)];
 
         // With current (today's) boundaries → NOT today, but still in the week window.
-        let (today, week, month, total) = event_row_counts(&events, bounds());
-        assert_eq!(today, 0, "event from yesterday must not count as today");
-        assert_eq!(week, 1, "but it is still within the 7-day window");
-        assert_eq!(month, 1);
-        assert_eq!(total, 1);
+        let c = event_row_counts(&events, bounds());
+        assert_eq!(c.today, 0, "event from yesterday must not count as today");
+        assert_eq!(c.week, 1, "but it is still within the 7-day window");
+        assert_eq!(c.month, 1);
+        assert_eq!(c.total, 1);
 
         // With yesterday's boundaries (simulating stored stale counts) → WAS today.
-        let stale = (
-            TODAY_START - 1.0,          // "now"        = 23:59:59 yesterday
-            TODAY_START - 86_400_000.0, // "today_start" = day-before-yesterday midnight
-            TODAY_START,                // "today_end"   = yesterday midnight
-            MONTH_START,
-            TODAY_START - 86_400_000.0 - 7.0 * 86_400_000.0, // "week_start"
-        );
-        let (today_stale, ..) = event_row_counts(&events, stale);
+        let stale = Bounds {
+            now: TODAY_START - 1.0,                  // 23:59:59 yesterday
+            today_start: TODAY_START - 86_400_000.0, // yesterday midnight
+            today_end: TODAY_START,                  // today midnight
+            month_start: MONTH_START,
+            week_start: TODAY_START - 86_400_000.0 - 7.0 * 86_400_000.0,
+        };
+        let today_stale = event_row_counts(&events, stale).today;
         assert_eq!(
             today_stale, 1,
             "same event WAS counted as today under yesterday's stale boundaries"
         );
+    }
+
+    fn header_with(c: Counts) -> TopicHeader {
+        let mut h = TopicHeader::new("t".into(), "Running".into());
+        h.set_counts(c);
+        h
+    }
+
+    #[test]
+    fn topic_header_counts_round_trip() {
+        let mut h = TopicHeader::new("t".into(), "Running".into());
+        assert_eq!(h.counts(), Counts::default());
+        h.set_counts(counts(1, 2, 3, 4));
+        assert_eq!(h.counts(), counts(1, 2, 3, 4));
+        assert_eq!(
+            (h.count_today, h.count_week, h.count_month, h.count_total),
+            (1, 2, 3, 4)
+        );
+    }
+
+    #[test]
+    fn with_added_event_now_bumps_every_period() {
+        let h = with_added_event(&header_with(counts(1, 2, 3, 4)), NOW, bounds());
+        assert_eq!(h.counts(), counts(2, 3, 4, 5));
+    }
+
+    #[test]
+    fn with_added_event_yesterday_skips_today() {
+        let h = with_added_event(
+            &header_with(Counts::default()),
+            NOW - 86_400_000.0,
+            bounds(),
+        );
+        assert_eq!(h.counts(), counts(0, 1, 1, 1));
+    }
+
+    #[test]
+    fn with_added_event_future_counts_month_but_not_week() {
+        // A manually logged event two days ahead is outside the rolling
+        // 7-day window (which ends at now) but still inside this month.
+        let h = with_added_event(
+            &header_with(Counts::default()),
+            NOW + 2.0 * 86_400_000.0,
+            bounds(),
+        );
+        assert_eq!(h.counts(), counts(0, 0, 1, 1));
+    }
+
+    #[test]
+    fn with_added_event_keeps_identity() {
+        let h = with_added_event(&header_with(Counts::default()), NOW, bounds());
+        assert_eq!((h.id.as_str(), h.name.as_str()), ("t", "Running"));
     }
 
     #[test]
@@ -353,13 +435,7 @@ mod tests {
             topic_id: "t1".into(),
             timestamp: "2023-11-15T12:00:00.000Z".into(),
             timestamp_ms: NOW,
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            ..Default::default()
         };
         let export = BulkExport {
             version: 1,
@@ -400,13 +476,7 @@ mod tests {
             topic_id: "t1".into(),
             timestamp: "2023-11-15T12:00:00.000Z".into(),
             timestamp_ms: NOW,
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            ..Default::default()
         };
         let json = serde_json::to_string(&e).unwrap();
         let e2: EventRow = serde_json::from_str(&json).unwrap();
@@ -518,24 +588,24 @@ mod wasm_tests {
     // time_boundaries: structural invariants
     #[wasm_bindgen_test]
     fn time_boundaries_ordering_invariants() {
-        let (now_ms, today_start, today_end, month_start, week_start) = time_boundaries();
-        assert!(now_ms > 0.0);
-        assert!(today_start <= now_ms, "today_start should be <= now");
-        assert!(now_ms < today_end, "now should be < today_end");
-        assert!(month_start <= now_ms, "month_start should be <= now");
-        assert!(week_start <= now_ms, "week_start should be <= now");
+        let b = time_boundaries();
+        assert!(b.now > 0.0);
+        assert!(b.today_start <= b.now, "today_start should be <= now");
+        assert!(b.now < b.today_end, "now should be < today_end");
+        assert!(b.month_start <= b.now, "month_start should be <= now");
+        assert!(b.week_start <= b.now, "week_start should be <= now");
     }
 
     #[wasm_bindgen_test]
     fn time_boundaries_today_span_is_exactly_one_day() {
-        let (_, today_start, today_end, _, _) = time_boundaries();
-        assert_eq!(today_end - today_start, 86_400_000.0);
+        let b = time_boundaries();
+        assert_eq!(b.today_end - b.today_start, 86_400_000.0);
     }
 
     #[wasm_bindgen_test]
     fn time_boundaries_week_start_is_seven_days_before_now() {
-        let (now_ms, _, _, _, week_start) = time_boundaries();
-        assert_eq!(now_ms - week_start, 7.0 * 86_400_000.0);
+        let b = time_boundaries();
+        assert_eq!(b.now - b.week_start, 7.0 * 86_400_000.0);
     }
 
     // export_topic: smoke test — must not panic with empty or non-empty input
@@ -547,13 +617,7 @@ mod wasm_tests {
             topic_id: "t1".into(),
             timestamp: "2023-11-15T12:00:00.000Z".into(),
             timestamp_ms: 1_700_046_000_000.0,
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            ..Default::default()
         };
         export_topic("smoke-test-2", &[ev]);
     }

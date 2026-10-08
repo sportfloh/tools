@@ -4,6 +4,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
+use crate::time::Counts;
+
 // ─── Data model ──────────────────────────────────────────────────────────────
 
 /// Lightweight header kept in reactive signals — no events Vec.
@@ -17,8 +19,38 @@ pub struct TopicHeader {
     pub count_month: u32,
 }
 
+impl TopicHeader {
+    /// A fresh topic with all counts at zero.
+    pub(crate) fn new(id: String, name: String) -> Self {
+        TopicHeader {
+            id,
+            name,
+            count_total: 0,
+            count_today: 0,
+            count_week: 0,
+            count_month: 0,
+        }
+    }
+
+    pub(crate) fn counts(&self) -> Counts {
+        Counts {
+            today: self.count_today,
+            week: self.count_week,
+            month: self.count_month,
+            total: self.count_total,
+        }
+    }
+
+    pub(crate) fn set_counts(&mut self, c: Counts) {
+        self.count_today = c.today;
+        self.count_week = c.week;
+        self.count_month = c.month;
+        self.count_total = c.total;
+    }
+}
+
 /// Row stored in IDB "events" store.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct EventRow {
     pub id: String,
     pub topic_id: String,
@@ -129,15 +161,11 @@ pub(crate) async fn load_events_for_topic(db: &Rexie, topic_id: &str) -> Vec<Eve
 
 pub(crate) async fn refresh_topic_counts_idb(db: &Rexie, header: &TopicHeader) -> TopicHeader {
     let events = load_events_for_topic(db, &header.id).await;
-    let (today, week, month, total) =
-        crate::time::event_row_counts(&events, crate::time::time_boundaries());
-    let updated = TopicHeader {
-        count_today: today,
-        count_week: week,
-        count_month: month,
-        count_total: total,
-        ..header.clone()
-    };
+    let mut updated = header.clone();
+    updated.set_counts(crate::time::event_row_counts(
+        &events,
+        crate::time::time_boundaries(),
+    ));
     save_topic_header(db, &updated).await;
     updated
 }
@@ -255,13 +283,7 @@ mod wasm_tests {
             topic_id: topic_id.into(),
             timestamp: "2023-11-15T12:00:00.000Z".into(),
             timestamp_ms: ts_ms,
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            ..Default::default()
         }
     }
 
@@ -420,13 +442,7 @@ mod wasm_tests {
             topic_id: "topic-refresh-1".into(),
             timestamp: crate::time::now_timestamp(),
             timestamp_ms: js_sys::Date::now(),
-            lat: None,
-            lon: None,
-            altitude: None,
-            heading: None,
-            speed: None,
-            accuracy: None,
-            altitude_accuracy: None,
+            ..Default::default()
         };
         add_event_idb(&db, &ev).await;
 
