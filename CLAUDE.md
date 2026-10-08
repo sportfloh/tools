@@ -50,9 +50,13 @@ cargo test --lib
 
 # WASM integration tests (from the tool directory — requires Chrome or Firefox)
 cd tools/trackit && wasm-pack test --headless --chrome
+cd tools/tech-event-announce && wasm-pack test --headless --chrome   # storage.rs only
 ```
 
-### Current coverage (36 native + 26 WASM tests)
+CI (`ci-tech-event-announce.yml`) runs only the native tests for tech-event-announce;
+run its two WASM tests locally when touching `storage.rs`.
+
+### Current coverage (61 native + 32 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -68,11 +72,25 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `with_added_event_yesterday_skips_today` | native | `time.rs` | a 24 h old event bumps week, month, total but not today |
 | `with_added_event_future_counts_month_but_not_week` | native | `time.rs` | a future event (manual add) is outside the rolling week but in the month |
 | `with_added_event_keeps_identity` | native | `time.rs` | id and name are carried over unchanged |
+| `merge_new_events_skips_duplicates` | native | `time.rs` | import dedup by timestamp, against stored events and within the file |
+| `merge_new_events_all_new` | native | `time.rs` | nothing stored yet → everything is new, 0 duplicates |
+| `validate_topic_name_trims` | native | `time.rs` | surrounding whitespace is removed |
+| `validate_topic_name_rejects_empty` | native | `time.rs` | blank names are rejected |
+| `validate_topic_name_rejects_duplicate_ignoring_case` | native | `time.rs` | "running" clashes with "Running" |
+| `validate_topic_name_allows_own_name` | native | `time.rs` | keeping a topic's own name is fine (caller passes only *other* names) |
+| `move_item_up_and_down` | native | `time.rs` | ▲/▼ swap with the neighbour |
+| `move_item_at_the_ends_is_a_no_op` | native | `time.rs` | first ▲ / last ▼ / out-of-range index change nothing |
+| `sort_topics_by_position_then_name` | native | `time.rs` | topic order: `position`, then name (legacy records are all 0) |
 | `topic_header_serde_round_trip` | native | `time.rs` | `TopicHeader` serialises and deserialises correctly |
 | `event_row_serde_round_trip` | native | `time.rs` | `EventRow` serialises and deserialises correctly |
 | `bulk_export_serde_round_trip` | native | `time.rs` | `BulkExport` + `TopicExport` round-trip through JSON |
 | `parse_bulk_import_valid` | native | `time.rs` | valid JSON deserialises to `BulkExport` with correct fields |
 | `parse_bulk_import_invalid_returns_none` | native | `time.rs` | malformed JSON and missing fields return `None` |
+| `parse_bulk_import_rejects_unknown_version` | native | `time.rs` | a backup with `version != 1` is rejected |
+| `count_noun_singular_and_plural` | native | `app.rs` | "1 topic" / "3 topics" |
+| `import_message_with_duplicates` | native | `app.rs` | toast text incl. "(15 duplicates skipped)" |
+| `import_message_singular` | native | `app.rs` | singular nouns in the toast text |
+| `import_message_without_duplicates` | native | `app.rs` | no parenthetical when nothing was skipped |
 | `parse_add_param_raw_present` | native | `app.rs` | `?add=` param is extracted correctly, including encoded values |
 | `parse_add_param_raw_absent` | native | `app.rs` | missing / non-matching params return `None` |
 | `chat_renders_full_template` | native | `templates.rs` (TEA) | all placeholders appear in the Chat output |
@@ -92,6 +110,17 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `mastodon_char_count_no_url_returns_plain_chars_count` | native | `templates.rs` (TEA) | non-ASCII text with no URL matches `grapheme_count` exactly |
 | `mastodon_char_count_combining_diacritic_counts_as_one_grapheme` | native | `templates.rs` (TEA) | decomposed diacritic in surrounding text counts as 1 grapheme |
 | `mastodon_char_count_emoji_with_modifier_counts_as_one_grapheme` | native | `templates.rs` (TEA) | emoji + skin-tone modifier (2 codepoints) counts as 1 grapheme |
+| `parse_de_date_valid` | native | `templates.rs` (TEA) | `DD.MM.YYYY` and `D.MM.YYYY` (trimmed) parse |
+| `parse_de_date_rejects_impossible_dates` | native | `templates.rs` (TEA) | 31.04., day 0, month 13, ISO format, 2-digit year, empty |
+| `parse_de_date_handles_leap_years` | native | `templates.rs` (TEA) | 29.02. in 2024/2000 valid, in 2025/1900 not |
+| `weekday_known_dates` | native | `templates.rs` (TEA) | Sakamoto weekday for known Saturdays / Tuesday / Thursday |
+| `date_warning_messages` | native | `templates.rs` (TEA) | no hint for empty / Saturday; "kein Samstag (Dienstag)"; "Ungültiges Datum" |
+| `subject_uses_custom_time` | native | `templates.rs` (TEA) | `Settings.time` replaces "14 Uhr" in the subject |
+| `email_body_uses_custom_signature_and_time` | native | `templates.rs` (TEA) | custom signature and time; no default left over |
+| `chat_and_mastodon_use_custom_time` | native | `templates.rs` (TEA) | custom time in chat and Mastodon texts |
+| `mailto_url_encodes_reserved_chars_and_spaces` | native | `templates.rs` (TEA) | `&`, `?`, spaces → `%26`, `%3F`, `%20` |
+| `mailto_url_encodes_umlauts_and_newlines` | native | `templates.rs` (TEA) | UTF-8 percent-encoding, `\n` → `%0D%0A` |
+| `mailto_url_round_trips_full_email` | native | `templates.rs` (TEA) | a real subject/body yields a URL without raw spaces/newlines |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
@@ -99,7 +128,7 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `format_timestamp_shape_is_stable_for_any_valid_iso` | WASM | `time.rs` | shape holds for a second ISO input |
 | `now_timestamp_returns_iso_utc_string` | WASM | `time.rs` | non-empty, contains `T`, ends with `Z` |
 | `now_local_datetime_str_has_expected_shape` | WASM | `time.rs` | 19-char `YYYY-MM-DDTHH:MM:SS` layout |
-| `new_id_has_numeric_dash_numeric_format` | WASM | `time.rs` | ID is `{digits}-{digits}` |
+| `new_id_is_uuid_v4` | WASM | `time.rs` | ID is a version-4 UUID (`crypto.randomUUID()`) |
 | `new_id_is_unique_across_calls` | WASM | `time.rs` | two consecutive calls differ |
 | `time_boundaries_ordering_invariants` | WASM | `time.rs` | `today_start ≤ now < today_end`, `month_start ≤ now`, `week_start ≤ now` |
 | `time_boundaries_today_span_is_exactly_one_day` | WASM | `time.rs` | `today_end − today_start == 86 400 000` |
@@ -117,6 +146,12 @@ cd tools/trackit && wasm-pack test --headless --chrome
 | `idb_enrich_updates_existing_event` | WASM | `db.rs` | GPS enrichment overwrites an existing event in place |
 | `idb_open_failure_returns_err` | WASM | `db.rs` | a rejected IDB open (version downgrade) returns `Err` instead of panicking |
 | `topic_signal_outlives_disposed_handler_scope` | WASM | `app.rs` | `new_topic_signal` survives disposal of the scope it was created in |
+| `undo_logged_event_restores_counts` | WASM | `app.rs` | Undo deletes the logged event and brings counts back to 0 |
+| `idb_add_events_bulk_writes_all` | WASM | `db.rs` | 50 rows written in one transaction are all stored |
+| `idb_add_events_bulk_empty_is_ok` | WASM | `db.rs` | bulk insert of nothing commits |
+| `idb_save_topic_headers_persists_positions` | WASM | `db.rs` | batch-saved positions come back sorted from `load_topic_headers` |
+| `storage_round_trip` | WASM | `storage.rs` (TEA) | `localStorage` save + load, incl. newlines |
+| `storage_missing_key_is_none` | WASM | `storage.rs` (TEA) | unknown key → `None` |
 | `refresh_all_counts_corrects_stale_signal` | WASM | `app.rs` | `refresh_all_topic_counts` updates stale Leptos signals to match recomputed IDB counts |
 
 ## TDD Workflow
@@ -186,7 +221,8 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | `tools/trackit/src/time.rs` | Timestamp helpers, count computation, import/export |
 | `tools/trackit/src/lib.rs` | Re-exports for the `trackitlib` rlib crate |
 | `tools/tech-event-announce/src/app.rs` | Form + output cards (copy to clipboard, Mastodon char counter) |
-| `tools/tech-event-announce/src/templates.rs` | Pure text templates (chat, e-mail, Mastodon) and grapheme / Mastodon counting |
+| `tools/tech-event-announce/src/templates.rs` | Pure text templates (chat, e-mail, Mastodon) taking `&Settings`; grapheme / Mastodon counting; German date parsing + weekday hint; `mailto_url` |
+| `tools/tech-event-announce/src/storage.rs` | Fail-soft `localStorage` wrapper (`load` / `save`) |
 | `tools/{trackit,tech-event-announce}/public/service-worker.js` | Offline cache, one per tool; caches are prefixed with the tool name |
 
 ## Key dependencies
@@ -225,6 +261,8 @@ Two IDB stores:
 - `topics` — keyed by `id`, holds `TopicHeader` (name + pre-computed counts)
 - `events` — keyed by `id`, indexed by `topic_id` via `by_topic`, holds `EventRow`
 
+`TopicHeader.position` (`#[serde(default)]`, so older records load as 0) orders the topic list; `load_topic_headers` returns topics sorted by `(position, name)` and `save_topic_headers_idb` rewrites positions in one transaction after a ▲/▼ move. New topics get `max + 1`. Ids come from `crypto.randomUUID()` (fallback: timestamp + random outside secure contexts).
+
 Counts (today / week / month / total) are stored **denormalized** in `TopicHeader` and recomputed from `EventRow` timestamps whenever events are added, deleted, or imported. `time_boundaries()` returns a `Bounds` struct, `event_row_counts()` a `Counts` struct; a single new event is applied with `with_added_event()`.
 
 Logging an event (`record_event` in `app.rs`) writes the event and the bumped header in one transaction, then attaches a GPS fix in the background via `enrich_event_idb`, which only writes if the event still exists (it may have been deleted while waiting for the fix).
@@ -234,6 +272,9 @@ Logging an event (`record_event` in `app.rs`) writes the event and the bumped he
 Leptos signals are the only state:
 - `TopicList` = `RwSignal<Vec<RwSignal<TopicHeader>>>` — outer signal changes on add/remove, inner signals change when counts change (avoids full list re-renders)
 - Three newtype-wrapped `RwSignal<bool>` passed via Leptos context: `Editing`, `ShowDetail`, `ShowEventDetail`
+- `PendingDelete(RwSignal<Option<String>>)` in context: topic whose "−" was tapped and now shows the red "Delete" confirm button; cleared when edit mode ends. Edit mode is also left automatically when the last topic is deleted.
+- `Toasts` (Copy handle: `RwSignal<Option<Toast>>` + generation counter) in context; `<ToastBar/>` renders it in an `aria-live` region and hides it after 4 s. `Toast.undo` is an `Arc<dyn Fn>`, deliberately not a Leptos `Callback` (see Gotchas). Used for "Logged in X · Undo" and import summaries.
+- Per-`TopicCard` local state: `renaming: RwSignal<Option<String>>` (inline rename draft in edit mode)
 - `App` keeps `db_ready: RwSignal<bool>` and `db_error: RwSignal<Option<String>>` locally; `open_db()` returns `Result` and a failure renders a "Storage unavailable" message
 - Topic signals are created only via `new_topic_signal(&app_owner, h)` so they are owned by `App` (see Gotchas)
 - `RwSignal<Option<EventRow>>` in context holds the event currently open in the event detail screen
@@ -246,7 +287,9 @@ A `visibilitychange` listener is registered on `document` inside `App()`. When t
 
 **Per-topic (plain-text):** one timestamp per line: `YYYY-MM-DD HH:MM:SS.mmm000`. Import parses via `js_sys::Date`; export triggers a browser download via a `Blob` URL. Accessible via the `↑` / export button inside the topic detail screen.
 
-**Bulk (JSON):** a single `trackit-YYYY-MM-DD.json` file containing all topics and all their events. Structure: `{ version: 1, topics: [{ id, name, events: [...EventRow] }] }`. Counts are excluded (recomputed on import). Accessible via the `⬇` (export) and `⬆` (import) buttons in the main header. Import is additive and deduplicates events by `timestamp` string, matching the per-topic import behaviour.
+**Bulk (JSON):** a single `trackit-YYYY-MM-DD.json` file containing all topics and all their events. Structure: `{ version: 1, topics: [{ id, name, events: [...EventRow] }] }`, topics in display order. Counts are excluded (recomputed on import). Accessible via the `⬇` (export) and `⬆` (import) buttons in the main header. A file with any other `version` is rejected.
+
+Both imports go through `import_into_topic` (`app.rs`): match the topic by name (or create it at the end of the list), dedup by `timestamp` via `merge_new_events` (also within the file), give new rows fresh ids, write them in **one** transaction (`add_events_bulk_idb`), then recompute counts. A toast reports the result ("Imported 120 events into Running (15 duplicates skipped)", or "Not a trackit backup").
 
 ### URL actions (Apple Shortcuts / deep links)
 
@@ -260,6 +303,12 @@ https://<host>/tools/trackit/?add=Morning%20Run   ← spaces as %20
 On iOS 16.4+ the PWA opens as a standalone app; the event is recorded immediately and the updated count is visible in the topic list. On older iOS versions the URL opens in Safari instead.
 
 The parsing helper `parse_add_param_raw` is pure Rust (no WASM APIs) and is covered by native unit tests.
+
+### tech-event-announce
+
+Single form (date, topic, description) → four output cards (Chat, E-Mail-Betreff, E-Mail-Text, Mastodon), each with "Kopieren"; E-Mail-Text adds a `mailto:` link, Chat/Mastodon add "Teilen" when `navigator.share` exists. The date shows a hint when it is invalid or not a Saturday (it is never blocked).
+
+`localStorage` keys (via `storage.rs`): `tea.topic`, `tea.descr` (draft, cleared by "Leeren"), `tea.time`, `tea.signature` (the "Einstellungen" section; an empty field falls back to `Settings::default()` = "14 Uhr" / "sportfloh"). The date is not stored; it defaults to the next Saturday.
 
 ### PWA
 
@@ -338,6 +387,12 @@ Rules:
   signals under the `App` owner (`new_topic_signal`).
 - **`<For>` children don't re-run when a row with the same key changes.** Closures inside them must
   look up current data (by id) at call time rather than capture the row.
+- **Renaming a topic breaks its `?add=<name>` shortcuts** — they match by name. The rename toast
+  says so.
+- **Playwright `click()` can scroll `.app` sideways.** `.app` is `overflow: hidden` with the
+  detail screens parked off-screen to the right; Playwright's scroll-into-view sometimes sets
+  `.app.scrollLeft`, dragging those screens into view. Real taps/keys don't. In e2e scripts
+  submit forms with Enter (or reset `scrollLeft`) instead of clicking.
 - **Service-worker caches are per origin**, shared by all tools on GitHub Pages. Each SW must only
   delete caches with its own prefix (`trackit-`, `tech-event-announce-`).
 - **`weave setup`** rewrites `.gitattributes` with its full pattern list; only run it when
