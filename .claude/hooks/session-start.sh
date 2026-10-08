@@ -13,6 +13,9 @@ set -euo pipefail
 
 REPO="${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
 TOOLS_BIN=/opt/claude-tools/bin   # prepended to PATH, shadows /opt/node22/bin/chromedriver
+# Same versions as the CI / deploy workflows (TRUNK_VERSION, WASM_PACK_VERSION there).
+TRUNK_VERSION=0.21.14
+WASM_PACK_VERSION=0.15.0
 LOG_DIR=/tmp/claude-session-start
 mkdir -p "$TOOLS_BIN" "$LOG_DIR"
 export PATH="$TOOLS_BIN:$HOME/.cargo/bin:$PATH"
@@ -46,12 +49,12 @@ fi
 
 # --- trunk (binstall's source fallback fails to compile lightningcss; use the release tarball)
 if ! have trunk; then
-    curl -sSfL https://github.com/trunk-rs/trunk/releases/latest/download/trunk-x86_64-unknown-linux-gnu.tar.gz \
+    curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v$TRUNK_VERSION/trunk-x86_64-unknown-linux-gnu.tar.gz" \
         | tar -xz -C "$HOME/.cargo/bin" trunk
 fi
 
 # --- wasm-pack, cargo-edit (cargo upgrade) -------------------------------------
-have wasm-pack || cargo binstall -y --quiet wasm-pack
+have wasm-pack || cargo binstall -y --quiet "wasm-pack@$WASM_PACK_VERSION"
 have cargo-upgrade || cargo binstall -y --quiet cargo-edit
 
 # --- ast-grep (/usr/bin/sg on Debian/Ubuntu is shadow-utils, not ast-grep) -------
