@@ -201,7 +201,7 @@ pub(crate) struct BulkExport {
 /// Serialize all topics+events to JSON and trigger a browser download.
 pub(crate) fn export_all(topics: &[(TopicHeader, Vec<EventRow>)]) {
     let export = BulkExport {
-        version: 1,
+        version: BULK_EXPORT_VERSION,
         topics: topics
             .iter()
             .map(|(h, evs)| TopicExport {
@@ -231,9 +231,15 @@ pub(crate) fn export_all(topics: &[(TopicHeader, Vec<EventRow>)]) {
     web_sys::Url::revoke_object_url(&url).unwrap();
 }
 
-/// Deserialize a bulk-export JSON string; returns `None` on any parse error.
+/// The only backup format version this build understands.
+pub(crate) const BULK_EXPORT_VERSION: u32 = 1;
+
+/// Deserialize a bulk-export JSON string; returns `None` on any parse error
+/// or an unknown format version.
 pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
-    serde_json::from_str(json).ok()
+    serde_json::from_str::<BulkExport>(json)
+        .ok()
+        .filter(|b| b.version == BULK_EXPORT_VERSION)
 }
 
 // ─── Unit tests ───────────────────────────────────────────────────────────────
@@ -461,6 +467,12 @@ mod tests {
         assert!(result.is_some());
         let bulk = result.unwrap();
         assert_eq!(bulk.topics[0].name, "Running");
+    }
+
+    #[test]
+    fn parse_bulk_import_rejects_unknown_version() {
+        let json = r#"{"version":2,"topics":[{"id":"t1","name":"Running","events":[]}]}"#;
+        assert!(parse_bulk_import(json).is_none());
     }
 
     #[test]
