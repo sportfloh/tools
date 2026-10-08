@@ -416,14 +416,16 @@ pub fn TopicDetail() -> impl IntoView {
                                     eid.with_value(|id| swiped_id.get().as_deref() == Some(id))
                                 };
 
-                                let open_event_detail = {
-                                    let ev_clone = ev.clone();
-                                    move |me: leptos::ev::MouseEvent| {
-                                        me.stop_propagation();
-                                        if !is_swiped() {
-                                            event_detail_ev.set(Some(ev_clone.clone()));
-                                            show_event_detail.set(true);
-                                        }
+                                // Look the row up at click time: <For> is keyed by id, so a
+                                // row later enriched with GPS does not re-run this closure.
+                                let open_event_detail = move |me: leptos::ev::MouseEvent| {
+                                    me.stop_propagation();
+                                    if !is_swiped() {
+                                        let current = eid.with_value(|id| {
+                                            events.with_untracked(|v| v.iter().find(|e| &e.id == id).cloned())
+                                        });
+                                        event_detail_ev.set(current);
+                                        show_event_detail.set(true);
                                     }
                                 };
 
