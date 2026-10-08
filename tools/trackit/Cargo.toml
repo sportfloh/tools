@@ -24,7 +24,7 @@ web-sys = { version = "0.3.106", features = [
     "HtmlAnchorElement", "HtmlInputElement",
     "FileReader", "File", "FileList",
     "TouchEvent", "Touch", "TouchList",
-    "Navigator", "Geolocation",
+    "Navigator", "Geolocation", "Crypto",
     "GeolocationPosition", "GeolocationCoordinates", "PositionOptions",
 ] }
 wasm-bindgen-futures = "0.4"

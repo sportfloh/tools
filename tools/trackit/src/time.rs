@@ -38,10 +38,21 @@ pub(crate) fn format_timestamp(iso: &str) -> String {
     )
 }
 
+/// A new random id: `crypto.randomUUID()`. That API only exists in secure
+/// contexts (https, localhost); elsewhere fall back to timestamp + random.
 pub(crate) fn new_id() -> String {
-    let ts = js_sys::Date::now() as u64;
-    let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
-    format!("{}-{}", ts, rand)
+    let crypto = window().and_then(|w| w.crypto().ok());
+    let has_random_uuid = crypto.as_ref().is_some_and(|c| {
+        js_sys::Reflect::get(c, &JsValue::from_str("randomUUID")).is_ok_and(|f| f.is_function())
+    });
+    match crypto {
+        Some(c) if has_random_uuid => c.random_uuid(),
+        _ => {
+            let ts = js_sys::Date::now() as u64;
+            let rand = (js_sys::Math::random() * 1_000_000.0) as u64;
+            format!("{ts}-{rand}")
+        }
+    }
 }
 
 /// Period boundaries (epoch ms) used to bucket events into today / week / month.
@@ -747,21 +758,18 @@ mod wasm_tests {
         assert_eq!(&s[16..17], ":");
     }
 
-    // new_id: format is {digits}-{digits}
+    // new_id: a version-4 UUID (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx)
     #[wasm_bindgen_test]
-    fn new_id_has_numeric_dash_numeric_format() {
+    fn new_id_is_uuid_v4() {
         let id = new_id();
-        let mut parts = id.splitn(2, '-');
-        let ts_part = parts.next().expect("missing ts part");
-        let rand_part = parts.next().expect("missing rand part");
-        assert!(
-            ts_part.chars().all(|c| c.is_ascii_digit()),
-            "ts not numeric: {ts_part}"
+        assert_eq!(id.len(), 36, "unexpected length: {id}");
+        let groups: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            groups.iter().map(|g| g.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
         );
-        assert!(
-            rand_part.chars().all(|c| c.is_ascii_digit()),
-            "rand not numeric: {rand_part}"
-        );
+        assert!(groups[2].starts_with('4'), "not version 4: {id}");
+        assert!(id.chars().all(|c| c == '-' || c.is_ascii_hexdigit()));
     }
 
     #[wasm_bindgen_test]
