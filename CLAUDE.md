@@ -362,7 +362,7 @@ Each tool's `index.html` → `manifest.json` + `public/icon.svg` (per tool) and
 Service worker (`tools/_shared/service-worker.js`), cache `<tool>-v4`:
 - **navigation**: network-first, cached page as offline fallback (query string ignored, so
   `?add=` links work offline);
-- **hashed Trunk assets** (`name-<16 hex>.js / _bg.wasm / .css`): cache-first;
+- **hashed Trunk assets** (`name-<1–16 hex>.js / _bg.wasm / .css`; Trunk does not zero-pad the hash): cache-first;
 - **other files** (manifest, icon): stale-while-revalidate;
 - after a fresh `index.html` arrives, cached hashed assets it no longer references are pruned;
 - `activate` deletes only the tool's older caches (and trackit's legacy `event-tracker-*`).
