@@ -1,6 +1,6 @@
 use crate::db::{
     DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
-    delete_topic_idb, get_db, load_events_for_topic, load_topic_headers, open_db,
+    delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic, load_topic_headers, open_db,
     refresh_topic_counts_idb, save_topic_header,
 };
 use crate::time::{
@@ -86,21 +86,28 @@ impl GpsSnapshot {
 
 /// Log `row` for the topic in `header`: persist the event together with the
 /// bumped counts, then attach a GPS fix in the background once one arrives.
-/// `on_saved` runs after the event has been persisted.
+/// `on_saved` runs after the event has been persisted, `on_enriched` after the
+/// GPS fix has been written. The fix is dropped if the event was deleted while
+/// waiting for it.
 async fn record_event(
     db: &Rexie,
     row: EventRow,
     header: RwSignal<TopicHeader>,
     on_saved: impl FnOnce(&EventRow),
+    on_enriched: impl FnOnce(&EventRow),
 ) {
     let updated =
         header.with_untracked(|h| with_added_event(h, row.timestamp_ms, time_boundaries()));
-    if add_event_and_update_header_idb(db, &row, &updated).await {
-        header.set(updated);
-        on_saved(&row);
+    if !add_event_and_update_header_idb(db, &row, &updated).await {
+        return;
     }
+    header.set(updated);
+    on_saved(&row);
     if let Some(gps) = get_gps().await {
-        add_event_idb(db, &gps.applied_to(row)).await;
+        let enriched = gps.applied_to(row);
+        if enrich_event_idb(db, &enriched).await {
+            on_enriched(&enriched);
+        }
     }
 }
 
@@ -139,7 +146,7 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
             ..Default::default()
         };
         spawn_local(async move {
-            record_event(&db, row, topic_signal, |_| {}).await;
+            record_event(&db, row, topic_signal, |_| {}, |_| {}).await;
         });
     };
 
@@ -285,10 +292,29 @@ pub fn TopicDetail() -> impl IntoView {
                 ..Default::default()
             };
             spawn_local(async move {
-                record_event(&db, row, sig, |row| {
-                    events.update(|evs| evs.insert(0, row.clone()));
-                    all_evs.update_value(|v| v.insert(0, row.clone()));
-                })
+                record_event(
+                    &db,
+                    row,
+                    sig,
+                    |row| {
+                        events.update(|evs| evs.insert(0, row.clone()));
+                        all_evs.update_value(|v| v.insert(0, row.clone()));
+                    },
+                    |row| {
+                        let replace = |v: &mut Vec<EventRow>| {
+                            if let Some(e) = v.iter_mut().find(|e| e.id == row.id) {
+                                *e = row.clone();
+                            }
+                        };
+                        events.update(replace);
+                        all_evs.update_value(replace);
+                        if event_detail_ev
+                            .with_untracked(|e| e.as_ref().map(|e| &e.id) == Some(&row.id))
+                        {
+                            event_detail_ev.set(Some(row.clone()));
+                        }
+                    },
+                )
                 .await;
             });
         }

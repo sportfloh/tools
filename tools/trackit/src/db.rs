@@ -185,6 +185,30 @@ pub(crate) async fn add_event_idb(db: &Rexie, row: &EventRow) {
     tx.done().await.ok();
 }
 
+/// Overwrite `row` (e.g. with a GPS fix) only if an event with its id is
+/// still stored. Returns whether the row was written.
+pub(crate) async fn enrich_event_idb(db: &Rexie, row: &EventRow) -> bool {
+    let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+    let store = match tx.store("events") {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    // get + put in one readwrite transaction, so a delete cannot slip in between.
+    if !matches!(store.get(JsValue::from_str(&row.id)).await, Ok(Some(_))) {
+        return false;
+    }
+    let Ok(val) = serde_wasm_bindgen::to_value(row) else {
+        return false;
+    };
+    if store.put(&val, None).await.is_err() {
+        return false;
+    }
+    tx.done().await.is_ok()
+}
+
 pub(crate) async fn add_event_and_update_header_idb(
     db: &Rexie,
     row: &EventRow,
@@ -259,7 +283,7 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 mod wasm_tests {
     use super::{
         EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
-        delete_topic_idb, load_events_for_topic, load_topic_headers, open_db,
+        delete_topic_idb, enrich_event_idb, load_events_for_topic, load_topic_headers, open_db,
         refresh_topic_counts_idb, save_topic_header,
     };
     use wasm_bindgen_test::*;
@@ -468,5 +492,45 @@ mod wasm_tests {
             saved.count_total, 1,
             "persisted count_total must be corrected"
         );
+    }
+
+    // IDB: enriching an event that was deleted meanwhile must not bring it back
+    #[wasm_bindgen_test]
+    async fn idb_enrich_does_not_resurrect_deleted_event() {
+        let db = open_db().await;
+        let ev = test_event("ev-enrich-del", "topic-enrich-1", 1_000.0);
+        add_event_idb(&db, &ev).await;
+        delete_event_idb(&db, "ev-enrich-del").await;
+
+        let enriched = EventRow {
+            lat: Some(48.1),
+            ..ev
+        };
+        assert!(!enrich_event_idb(&db, &enriched).await, "nothing to enrich");
+
+        let events = load_events_for_topic(&db, "topic-enrich-1").await;
+        assert!(
+            !events.iter().any(|e| e.id == "ev-enrich-del"),
+            "deleted event must stay deleted"
+        );
+    }
+
+    // IDB: enriching an existing event overwrites it in place
+    #[wasm_bindgen_test]
+    async fn idb_enrich_updates_existing_event() {
+        let db = open_db().await;
+        let ev = test_event("ev-enrich-upd", "topic-enrich-2", 1_000.0);
+        add_event_idb(&db, &ev).await;
+
+        let enriched = EventRow {
+            lat: Some(48.1),
+            lon: Some(11.5),
+            ..ev
+        };
+        assert!(enrich_event_idb(&db, &enriched).await);
+
+        let events = load_events_for_topic(&db, "topic-enrich-2").await;
+        assert_eq!(events.len(), 1);
+        assert_eq!((events[0].lat, events[0].lon), (Some(48.1), Some(11.5)));
     }
 }
