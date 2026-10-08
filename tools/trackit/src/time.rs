@@ -138,6 +138,36 @@ pub(crate) fn merge_new_events(
     (fresh, duplicates)
 }
 
+/// Why a topic name was rejected.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum NameError {
+    Empty,
+    Duplicate(String),
+}
+
+impl NameError {
+    pub(crate) fn message(&self) -> String {
+        match self {
+            NameError::Empty => "A topic needs a name".into(),
+            NameError::Duplicate(name) => format!("A topic named “{name}” already exists"),
+        }
+    }
+}
+
+/// Trim `new` and check it against the names of all *other* topics
+/// (case-insensitive). Returns the cleaned name.
+pub(crate) fn validate_topic_name(new: &str, others: &[String]) -> Result<String, NameError> {
+    let name = new.trim();
+    if name.is_empty() {
+        return Err(NameError::Empty);
+    }
+    let lower = name.to_lowercase();
+    if others.iter().any(|o| o.trim().to_lowercase() == lower) {
+        return Err(NameError::Duplicate(name.to_string()));
+    }
+    Ok(name.to_string())
+}
+
 pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
     let line = line.trim();
     if line.is_empty() {
@@ -268,8 +298,8 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bounds, BulkExport, Counts, TopicExport, event_row_counts, merge_new_events,
-        parse_bulk_import, with_added_event,
+        Bounds, BulkExport, Counts, NameError, TopicExport, event_row_counts, merge_new_events,
+        parse_bulk_import, validate_topic_name, with_added_event,
     };
     use crate::db::{EventRow, TopicHeader};
 
@@ -513,6 +543,40 @@ mod tests {
         let incoming = vec![ev_at("a"), ev_at("b")];
         let (fresh, dups) = merge_new_events(&[], incoming);
         assert_eq!((fresh.len(), dups), (2, 0));
+    }
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn validate_topic_name_trims() {
+        assert_eq!(
+            validate_topic_name("  Morning Run ", &names(&["Yoga"])),
+            Ok("Morning Run".into())
+        );
+    }
+
+    #[test]
+    fn validate_topic_name_rejects_empty() {
+        assert_eq!(validate_topic_name("   ", &[]), Err(NameError::Empty));
+    }
+
+    #[test]
+    fn validate_topic_name_rejects_duplicate_ignoring_case() {
+        assert_eq!(
+            validate_topic_name("running", &names(&["Running", "Yoga"])),
+            Err(NameError::Duplicate("running".into()))
+        );
+    }
+
+    #[test]
+    fn validate_topic_name_allows_own_name() {
+        // The caller passes only the *other* topics, so keeping a name is fine.
+        assert_eq!(
+            validate_topic_name("Running", &names(&["Yoga"])),
+            Ok("Running".into())
+        );
     }
 
     #[test]

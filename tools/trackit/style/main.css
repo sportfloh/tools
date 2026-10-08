@@ -322,6 +322,12 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Inline rename field (edit mode) */
+.topic-rename-input {
+  margin: 10px 0;
+  font-weight: 600;
+}
+
 /* iOS-style disclosure chevron */
 .btn-detail {
   background: transparent;

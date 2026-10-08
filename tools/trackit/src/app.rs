@@ -4,9 +4,9 @@ use crate::db::{
     load_topic_headers, open_db, refresh_topic_counts_idb, save_topic_header,
 };
 use crate::time::{
-    event_row_counts, export_all, export_topic, format_timestamp, merge_new_events, new_id,
-    now_local_datetime_str, now_timestamp, parse_bulk_import, parse_import_line, time_boundaries,
-    with_added_event,
+    NameError, event_row_counts, export_all, export_topic, format_timestamp, merge_new_events,
+    new_id, now_local_datetime_str, now_timestamp, parse_bulk_import, parse_import_line,
+    time_boundaries, validate_topic_name, with_added_event,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -250,10 +250,45 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     let is_pending_delete =
         move || pending_delete.with(|p| p.as_deref() == Some(&topic_signal.with(|h| h.id.clone())));
 
+    // Draft name while renaming inline (edit mode only).
+    let renaming: RwSignal<Option<String>> = RwSignal::new(None);
+    let rename_input = NodeRef::<leptos::html::Input>::new();
+    Effect::new(move |_| {
+        if let Some(input) = rename_input.get() {
+            let _ = input.focus();
+            input.select();
+        }
+    });
+    let commit_rename = move || {
+        let Some(draft) = renaming.get_untracked() else {
+            return;
+        };
+        renaming.set(None);
+        let (id, current) = topic_signal.with_untracked(|h| (h.id.clone(), h.name.clone()));
+        match validate_topic_name(&draft, &other_topic_names(topic_list, &id)) {
+            Ok(name) if name == current => {}
+            Ok(name) => {
+                topic_signal.update(|h| h.name = name.clone());
+                if let Some(db) = get_db() {
+                    let header = topic_signal.get_untracked();
+                    spawn_local(async move {
+                        save_topic_header(&db, &header).await;
+                    });
+                }
+                toasts.show(format!("Renamed to “{name}” – update ?add= shortcuts"));
+            }
+            Err(e) => toasts.show(e.message()),
+        }
+    };
+
     let add_event = move |_| {
         if editing.get_untracked() {
-            // Edit mode never logs; a tap just cancels a pending delete.
-            pending_delete.set(None);
+            // Edit mode never logs: a tap cancels a pending delete or renames.
+            if pending_delete.with_untracked(Option::is_some) {
+                pending_delete.set(None);
+            } else {
+                renaming.set(Some(topic_signal.with_untracked(|h| h.name.clone())));
+            }
             return;
         }
         let Some(db) = get_db() else { return };
@@ -338,20 +373,43 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
                     "−"
                 </button>
             </Show>
-            <button
-                class="topic-row-main"
-                type="button"
-                on:click=add_event
-                aria-label=move || format!("Log event for {}", topic_name.get())
+            <Show
+                when=move || editing.get() && renaming.with(Option::is_some)
+                fallback=move || view! {
+                    <button
+                        class="topic-row-main"
+                        type="button"
+                        on:click=add_event
+                        aria-label=move || {
+                            let verb = if editing.get() { "Rename" } else { "Log event for" };
+                            format!("{verb} {}", topic_name.get())
+                        }
+                    >
+                        <span class="topic-row-name">{topic_name}</span>
+                        <span class="topic-row-counts">
+                            {move || {
+                                let (today, week, month, total) = counts.get();
+                                format!("{} today · {} wk · {} mo · {} total", today, week, month, total)
+                            }}
+                        </span>
+                    </button>
+                }
             >
-                <span class="topic-row-name">{topic_name}</span>
-                <span class="topic-row-counts">
-                    {move || {
-                        let (today, week, month, total) = counts.get();
-                        format!("{} today · {} wk · {} mo · {} total", today, week, month, total)
-                    }}
-                </span>
-            </button>
+                <input
+                    class="topic-input topic-rename-input"
+                    type="text"
+                    node_ref=rename_input
+                    aria-label="Topic name"
+                    prop:value=move || renaming.get().unwrap_or_default()
+                    on:input=move |e| renaming.set(Some(event_target_value(&e)))
+                    on:keydown=move |e: leptos::ev::KeyboardEvent| match e.key().as_str() {
+                        "Enter" => commit_rename(),
+                        "Escape" => renaming.set(None),
+                        _ => {}
+                    }
+                    on:blur=move |_| commit_rename()
+                />
+            </Show>
             <Show
                 when=is_pending_delete
                 fallback=move || view! {
@@ -823,6 +881,15 @@ pub(crate) async fn undo_logged_event(
     true
 }
 
+/// Names of all topics except the one with id `except` (pass "" for none).
+fn other_topic_names(topic_list: TopicList, except: &str) -> Vec<String> {
+    topic_list.with_untracked(|rows| {
+        rows.iter()
+            .filter_map(|s| s.with_untracked(|h| (h.id != except).then(|| h.name.clone())))
+            .collect()
+    })
+}
+
 // ─── Topic signals ────────────────────────────────────────────────────────────
 
 /// Create a topic's signal owned by `owner` (the `App`), not by whichever
@@ -1177,10 +1244,14 @@ pub fn App() -> impl IntoView {
 
     let add_topic = move |ev: leptos::ev::SubmitEvent| {
         ev.prevent_default();
-        let name = new_name.get().trim().to_string();
-        if name.is_empty() {
-            return;
-        }
+        let name = match validate_topic_name(&new_name.get(), &other_topic_names(topic_list, "")) {
+            Ok(name) => name,
+            Err(NameError::Empty) => return,
+            Err(e) => {
+                toasts.show(e.message());
+                return;
+            }
+        };
         let header = TopicHeader::new(new_id(), name);
         if let Some(db) = get_db() {
             let h2 = header.clone();
