@@ -3,3 +3,4 @@
 tools/*/dist/
 .claude/settings.local.json
 graphify-out/
+__pycache__/

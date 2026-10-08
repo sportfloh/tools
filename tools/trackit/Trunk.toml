@@ -5,3 +5,9 @@ dist = "dist"
 [serve]
 port = 8080
 open = false
+
+# Release builds get a Content-Security-Policy meta tag (see ../_shared/csp.py).
+[[hooks]]
+stage = "post_build"
+command = "python3"
+command_arguments = ["../_shared/csp.py"]

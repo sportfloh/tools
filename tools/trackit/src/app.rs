@@ -1161,7 +1161,7 @@ pub fn EventDetail() -> impl IntoView {
                 <div class="header-bar">
                     <button class="header-btn header-btn-back" on:click=go_back>"‹ Back"</button>
                     <h1>"Event"</h1>
-                    <div class="header-btn" style="min-width:64px"></div>
+                    <div class="header-btn"></div>
                 </div>
             </header>
             <div class="event-detail-main">

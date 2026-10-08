@@ -21,6 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # csp.py (Trunk post_build hook) and the landing page's CSP style hash.
+      - name: CSP tests
+        run: python3 -m unittest discover -s tools/_shared -v
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
