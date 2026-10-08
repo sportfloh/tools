@@ -53,8 +53,9 @@ cd tools/trackit && wasm-pack test --headless --chrome
 cd tools/tech-event-announce && wasm-pack test --headless --chrome   # storage.rs only
 ```
 
-CI (`ci-tech-event-announce.yml`) runs only the native tests for tech-event-announce;
-run its two WASM tests locally when touching `storage.rs`.
+Both CI workflows (`ci-trackit.yml`, `ci-tech-event-announce.yml`) run fmt, clippy, the
+native tests and the tool's WASM tests. `deploy.yml` runs `cargo test --lib` before building,
+so a PR merged before its CI finished still cannot deploy failing code.
 
 ### Current coverage (70 native + 39 WASM tests)
 
@@ -213,6 +214,10 @@ rust-toolchain.toml      ← stable + wasm32-unknown-unknown
 ├── hooks/session-start.sh ← provisions web sessions (toolchain, trunk, wasm-pack, search tools, sem/weave)
 └── auto-pr.sh
 tools/
+├── _shared/             ← used by every tool's index.html via Trunk (not a crate)
+│   ├── base.css         ← reset, colour tokens (light/dark), header, scrollbar
+│   ├── register-sw.js   ← SW registration snippet (rel="inline")
+│   └── service-worker.js← the one service worker (copy-file into each dist/)
 ├── index.html           ← static landing page, served at /tools/ (copied by deploy.yml)
 ├── tech-event-announce/ ← served at /tools/tech-event-announce/ (same layout as trackit)
 └── trackit/             ← served at /tools/trackit/
@@ -242,7 +247,9 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | `tools/tech-event-announce/src/templates.rs` | Pure text templates (chat, e-mail, Mastodon) taking `&Settings`; grapheme / Mastodon counting; German date parsing + weekday hint; `mailto_url` |
 | `tools/tech-event-announce/src/storage.rs` | Fail-soft `localStorage` wrapper (`load` / `save`) |
 | `tools/index.html` | Static landing page at `/tools/` linking both tools (no build step; copied into the Pages artifact by `deploy.yml`) |
-| `tools/{trackit,tech-event-announce}/public/service-worker.js` | Offline cache, one per tool; caches are prefixed with the tool name |
+| `tools/_shared/service-worker.js` | The one service worker, copied into each tool's dist; cache prefix derived from its scope |
+| `tools/_shared/base.css` | Shared reset, colour tokens (light/dark), header bar, scrollbar; loaded before each tool's `style/main.css` |
+| `tools/_shared/register-sw.js` | SW registration snippet, inlined into each `index.html` by Trunk |
 
 ## Key dependencies
 
@@ -260,13 +267,22 @@ Upgrade everything with `cargo upgrade` (cargo-edit; skips pre-releases) followe
 also bumped weekly by Dependabot (`.github/dependabot.yml`).
 
 Tooling versions (installed by the SessionStart hook in web sessions): trunk 0.21.14,
-wasm-pack 0.15, ast-grep 0.45, fd 9, ripgrep 14, sem 0.25, weave 0.5.
+wasm-pack 0.15.0, ast-grep 0.45, fd 9, ripgrep 14, sem 0.25, weave 0.5.
+
+trunk and wasm-pack are **pinned** in three places that must stay in sync: `TRUNK_VERSION` /
+`WASM_PACK_VERSION` in `.github/workflows/{deploy,ci-trackit,ci-tech-event-announce}.yml`
+(downloaded as release tarballs) and the same variables in `.claude/hooks/session-start.sh`.
 
 Rust edition: **2024**.
 
 ## Architecture
 
-Single-page PWA built with **Leptos** (CSR/WASM) and **Trunk**. Entry point is `tools/trackit/src/main.rs`; logic is split across modules (`src/app.rs`, `src/db.rs`, etc.).
+Each tool is a single-page PWA built with **Leptos** (CSR/WASM) and **Trunk**, a separate crate
+under `tools/<name>/` (entry point `src/main.rs`, UI in `src/app.rs`). **trackit** keeps its data
+in IndexedDB (`db.rs`) with logic in `time.rs`; **tech-event-announce** is stateless apart from a
+`localStorage` draft (`storage.rs`) and pure text templates (`templates.rs`). They share only
+the shell in `tools/_shared/` (service worker, base CSS, SW registration). The sections below
+describe trackit unless they say otherwise.
 
 ### Data layer
 
@@ -339,7 +355,20 @@ Single form (date, topic, description) → four output cards (Chat, E-Mail-Betre
 
 ### PWA
 
-`index.html` → `manifest.json` + `public/service-worker.js` + `public/icon.svg`. Trunk copies these into `dist/` at build time (`copy-file` / `copy-dir` directives in `index.html`).
+Each tool's `index.html` → `manifest.json` + `public/icon.svg` (per tool) and
+`../_shared/service-worker.js` (`copy-file` directives), `../_shared/base.css` + `style/main.css`
+(`rel="css"`, hashed) and `../_shared/register-sw.js` (`rel="inline"`).
+
+Service worker (`tools/_shared/service-worker.js`), cache `<tool>-v4`:
+- **navigation**: network-first, cached page as offline fallback (query string ignored, so
+  `?add=` links work offline);
+- **hashed Trunk assets** (`name-<16 hex>.js / _bg.wasm / .css`): cache-first;
+- **other files** (manifest, icon): stale-while-revalidate;
+- after a fresh `index.html` arrives, cached hashed assets it no longer references are pruned;
+- `activate` deletes only the tool's older caches (and trackit's legacy `event-tracker-*`).
+
+Bump the `v4` in `CACHE_NAME` only when the caching scheme itself changes; new builds are
+handled by the hash-based pruning.
 
 ## Git workflow
 
@@ -423,8 +452,12 @@ Rules:
 - **`datetime-local` drops `:00` seconds from its value** ("…T09:30" instead of "…T09:30:00"),
   so compare parsed instants, not strings. Playwright's `fill()` rejects values with seconds;
   set `.value` and dispatch `input` in e2e scripts instead.
-- **Service-worker caches are per origin**, shared by all tools on GitHub Pages. Each SW must only
-  delete caches with its own prefix (`trackit-`, `tech-event-announce-`).
+- **Service-worker caches are per origin**, shared by all tools on GitHub Pages. The shared SW
+  derives its prefix from its scope (`/tools/trackit/` → `trackit-`) and only ever deletes caches
+  with that prefix.
+- **Screenshot comparisons need a frozen clock and blocked service workers** (Playwright
+  `serviceWorkers: 'block'`, a fixed `Date`), and a short wait after filling forms: buttons
+  have 150 ms colour transitions.
 - **`weave setup`** rewrites `.gitattributes` with its full pattern list; only run it when
   deliberately upgrading weave. The hook only sets the driver in `.git/config`.
 
