@@ -85,9 +85,13 @@ pub(crate) fn get_db() -> Option<Rc<Rexie>> {
 
 // ─── IDB helpers ─────────────────────────────────────────────────────────────
 
-pub(crate) async fn open_db() -> Rexie {
-    Rexie::builder("trackit-db")
-        .version(1)
+pub(crate) async fn open_db() -> Result<Rexie, rexie::Error> {
+    open_db_named("trackit-db", 1).await
+}
+
+async fn open_db_named(name: &str, version: u32) -> Result<Rexie, rexie::Error> {
+    Rexie::builder(name)
+        .version(version)
         .add_object_store(ObjectStore::new("topics").key_path("id"))
         .add_object_store(
             ObjectStore::new("events")
@@ -96,7 +100,6 @@ pub(crate) async fn open_db() -> Rexie {
         )
         .build()
         .await
-        .expect("IDB open failed")
 }
 
 pub(crate) async fn load_topic_headers(db: &Rexie) -> Vec<TopicHeader> {
@@ -284,7 +287,7 @@ mod wasm_tests {
     use super::{
         EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, delete_event_idb,
         delete_topic_idb, enrich_event_idb, load_events_for_topic, load_topic_headers, open_db,
-        refresh_topic_counts_idb, save_topic_header,
+        open_db_named, refresh_topic_counts_idb, save_topic_header,
     };
     use wasm_bindgen_test::*;
 
@@ -314,7 +317,7 @@ mod wasm_tests {
     // IDB: save a topic then load it back
     #[wasm_bindgen_test]
     async fn idb_save_and_load_topic() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         let hdr = test_header("topic-idb-1", "Running");
         save_topic_header(&db, &hdr).await;
         let loaded = load_topic_headers(&db).await;
@@ -328,7 +331,7 @@ mod wasm_tests {
     // IDB: add an event then retrieve it by topic
     #[wasm_bindgen_test]
     async fn idb_add_and_load_events() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         let ev = test_event("ev-idb-1", "topic-idb-2", 1_700_046_000_000.0);
         save_topic_header(&db, &test_header("topic-idb-2", "Cycling")).await;
         add_event_idb(&db, &ev).await;
@@ -339,7 +342,7 @@ mod wasm_tests {
     // IDB: delete an event
     #[wasm_bindgen_test]
     async fn idb_delete_event() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         let ev = test_event("ev-idb-del", "topic-idb-3", 1_700_046_000_000.0);
         save_topic_header(&db, &test_header("topic-idb-3", "Swimming")).await;
         add_event_idb(&db, &ev).await;
@@ -351,7 +354,7 @@ mod wasm_tests {
     // IDB: deleting a topic also removes all its events
     #[wasm_bindgen_test]
     async fn idb_delete_topic_cascades() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         save_topic_header(&db, &test_header("topic-del-1", "Yoga")).await;
         add_event_idb(&db, &test_event("ev-del-1", "topic-del-1", 1_000.0)).await;
         add_event_idb(&db, &test_event("ev-del-2", "topic-del-1", 2_000.0)).await;
@@ -368,7 +371,7 @@ mod wasm_tests {
     // IDB: saving a topic header twice with the same ID overwrites it
     #[wasm_bindgen_test]
     async fn idb_save_topic_header_overwrites() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         let mut hdr = test_header("topic-upsert-1", "Meditation");
         save_topic_header(&db, &hdr).await;
 
@@ -388,7 +391,7 @@ mod wasm_tests {
     // IDB: load_events_for_topic returns events newest-first
     #[wasm_bindgen_test]
     async fn idb_load_events_sorted_descending() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         save_topic_header(&db, &test_header("topic-sort-1", "Running")).await;
         add_event_idb(&db, &test_event("ev-sort-1", "topic-sort-1", 1_000.0)).await;
         add_event_idb(&db, &test_event("ev-sort-2", "topic-sort-1", 3_000.0)).await;
@@ -406,7 +409,7 @@ mod wasm_tests {
     // IDB: add_event_and_update_header_idb writes event + header atomically
     #[wasm_bindgen_test]
     async fn idb_add_event_and_update_header_atomic() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
 
         let hdr = TopicHeader {
             id: "topic-atomic-1".into(),
@@ -447,7 +450,7 @@ mod wasm_tests {
     // IDB: refresh_topic_counts_idb overwrites stale counts with recomputed values
     #[wasm_bindgen_test]
     async fn idb_refresh_topic_counts() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
 
         // Save a topic with obviously wrong (stale) counts.
         let stale = TopicHeader {
@@ -497,7 +500,7 @@ mod wasm_tests {
     // IDB: enriching an event that was deleted meanwhile must not bring it back
     #[wasm_bindgen_test]
     async fn idb_enrich_does_not_resurrect_deleted_event() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         let ev = test_event("ev-enrich-del", "topic-enrich-1", 1_000.0);
         add_event_idb(&db, &ev).await;
         delete_event_idb(&db, "ev-enrich-del").await;
@@ -518,7 +521,7 @@ mod wasm_tests {
     // IDB: enriching an existing event overwrites it in place
     #[wasm_bindgen_test]
     async fn idb_enrich_updates_existing_event() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
         let ev = test_event("ev-enrich-upd", "topic-enrich-2", 1_000.0);
         add_event_idb(&db, &ev).await;
 
@@ -532,5 +535,16 @@ mod wasm_tests {
         let events = load_events_for_topic(&db, "topic-enrich-2").await;
         assert_eq!(events.len(), 1);
         assert_eq!((events[0].lat, events[0].lon), (Some(48.1), Some(11.5)));
+    }
+
+    // IDB: an open that IndexedDB rejects is reported as Err instead of panicking
+    #[wasm_bindgen_test]
+    async fn idb_open_failure_returns_err() {
+        // Opening an existing database at a lower version is always a VersionError.
+        open_db_named("trackit-test-version", 2)
+            .await
+            .expect("first open succeeds")
+            .close();
+        assert!(open_db_named("trackit-test-version", 1).await.is_err());
     }
 }

@@ -626,6 +626,8 @@ pub(crate) async fn refresh_all_topic_counts(db: &Rexie, topic_list: TopicList) 
 pub fn App() -> impl IntoView {
     let topic_list: TopicList = RwSignal::new(Vec::new());
     let db_ready_signal = RwSignal::new(false);
+    // Set when IndexedDB cannot be opened (e.g. private browsing, blocked storage).
+    let db_error: RwSignal<Option<String>> = RwSignal::new(None);
 
     let (new_name, set_new_name) = signal(String::new());
     let editing = RwSignal::new(false);
@@ -648,7 +650,14 @@ pub fn App() -> impl IntoView {
         });
 
     spawn_local(async move {
-        let db = open_db().await;
+        let db = match open_db().await {
+            Ok(db) => db,
+            Err(e) => {
+                leptos::logging::error!("IndexedDB open failed: {e:?}");
+                db_error.set(Some(e.to_string()));
+                return;
+            }
+        };
         let headers_raw = load_topic_headers(&db).await;
         let mut headers: Vec<TopicHeader> = Vec::new();
         for h in &headers_raw {
@@ -969,8 +978,15 @@ pub fn App() -> impl IntoView {
                 </header>
                 <main class="app-main">
                     <div class="topic-list">
-                        <Show when=move || !db_ready_signal.get()>
+                        <Show when=move || !db_ready_signal.get() && db_error.with(Option::is_none)>
                             <div class="loading-indicator">"Loading…"</div>
+                        </Show>
+                        <Show when=move || db_error.with(Option::is_some)>
+                            <div class="empty-state db-error">
+                                <p>"Storage unavailable."</p>
+                                <p>"trackit needs IndexedDB, which this browser has blocked (private mode?)."</p>
+                                <p class="db-error-detail">{move || db_error.get().unwrap_or_default()}</p>
+                            </div>
                         </Show>
                         <Show when=move || db_ready_signal.get() && topic_list.get().is_empty()>
                             <div class="empty-state">
@@ -1019,7 +1035,7 @@ mod tests {
     /// counts with the values recomputed from the stored events.
     #[wasm_bindgen_test]
     async fn refresh_all_counts_corrects_stale_signal() {
-        let db = open_db().await;
+        let db = open_db().await.unwrap();
 
         let topic_id = new_id();
         let header = TopicHeader {

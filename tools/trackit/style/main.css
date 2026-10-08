@@ -434,6 +434,12 @@ html, body {
   color: var(--color-text);
   margin-bottom: 6px;
 }
+.db-error-detail {
+  margin-top: 12px;
+  font-size: .75rem;
+  font-family: ui-monospace, monospace;
+  word-break: break-word;
+}
 
 /* ── Manual-event modal (bottom sheet) ───────────────────────────────────── */
 /*
