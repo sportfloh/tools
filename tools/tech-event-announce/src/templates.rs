@@ -146,9 +146,62 @@ pub fn date_warning(s: &str) -> Option<String> {
     }
 }
 
+/// A `mailto:` URL that opens a new mail with `subject` and `body` filled in
+/// (RFC 6068: UTF-8 percent-encoding, line breaks as `%0D%0A`).
+pub fn mailto_url(subject: &str, body: &str) -> String {
+    let body = body.replace("\r\n", "\n").replace('\n', "\r\n");
+    format!(
+        "mailto:?subject={}&body={}",
+        percent_encode(subject),
+        percent_encode(&body)
+    )
+}
+
+/// Percent-encode every byte except RFC 3986 unreserved characters.
+fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- mailto ---
+
+    #[test]
+    fn mailto_url_encodes_reserved_chars_and_spaces() {
+        assert_eq!(
+            mailto_url("Tech-Event - Rust & Co?", "x"),
+            "mailto:?subject=Tech-Event%20-%20Rust%20%26%20Co%3F&body=x"
+        );
+    }
+
+    #[test]
+    fn mailto_url_encodes_umlauts_and_newlines() {
+        assert_eq!(
+            mailto_url("", "Hallo\nGrüße"),
+            "mailto:?subject=&body=Hallo%0D%0AGr%C3%BC%C3%9Fe"
+        );
+    }
+
+    #[test]
+    fn mailto_url_round_trips_full_email() {
+        let s = Settings::default();
+        let url = mailto_url(
+            &email_subject("10.10.2026", "Rust", &s),
+            &email_body("10.10.2026", "Rust", "Text.", &s),
+        );
+        assert!(url.starts_with("mailto:?subject=Tech-Event%20-%20Rust"));
+        assert!(!url.contains(' ') && !url.contains('\n'));
+        assert!(url.ends_with("Gru%C3%9F%2C%0D%0Asportfloh"));
+    }
 
     // --- settings ---
 

@@ -83,6 +83,8 @@ pub fn App() -> impl IntoView {
         templates::mastodon(d.trim(), t.trim(), de.trim(), &settings.get())
     });
 
+    let mail_href = Memo::new(move |_| templates::mailto_url(&email_subj.get(), &email_body.get()));
+
     let inputs_complete = Memo::new(move |_| {
         !date.get().trim().is_empty()
             && !topic.get().trim().is_empty()
@@ -174,15 +176,21 @@ pub fn App() -> impl IntoView {
 
                 // ── Right column: outputs ────────────────────────────────────
                 <div class="outputs-col">
-                    <OutputCard title="Chat" text=chat_text enabled=inputs_complete/>
-                    <OutputCard title="EmailBetreff" text=email_subj enabled=inputs_complete/>
-                    <OutputCard title="EmailBody" text=email_body enabled=inputs_complete/>
+                    <OutputCard title="Chat" text=chat_text enabled=inputs_complete shareable=true/>
+                    <OutputCard title="E-Mail-Betreff" text=email_subj enabled=inputs_complete/>
+                    <OutputCard
+                        title="E-Mail-Text"
+                        text=email_body
+                        enabled=inputs_complete
+                        mail_href=mail_href
+                    />
                     <OutputCard
                         title="Mastodon"
                         text=mastodon_text
                         enabled=inputs_complete
                         char_limit=500_u32
                         char_count=templates::mastodon_char_count
+                        shareable=true
                     />
                 </div>
             </main>
@@ -212,6 +220,14 @@ async fn write_clipboard(text: &str) -> bool {
             .is_ok()
 }
 
+/// Whether the browser offers the Web Share API (`navigator.share`).
+fn share_supported() -> bool {
+    web_sys::window().is_some_and(|w| {
+        js_sys::Reflect::get(&w.navigator(), &JsValue::from_str("share"))
+            .is_ok_and(|f| f.is_function())
+    })
+}
+
 #[component]
 fn OutputCard(
     title: &'static str,
@@ -219,7 +235,25 @@ fn OutputCard(
     enabled: Memo<bool>,
     #[prop(optional)] char_limit: Option<u32>,
     #[prop(optional)] char_count: Option<fn(&str) -> usize>,
+    /// Adds an "E-Mail öffnen" link with this `mailto:` URL.
+    #[prop(optional)]
+    mail_href: Option<Memo<String>>,
+    /// Adds a "Teilen" button (Web Share API) where the browser supports it.
+    #[prop(optional)]
+    shareable: bool,
 ) -> impl IntoView {
+    let can_share = shareable && share_supported();
+    let on_share = move |_| {
+        let t = text.get_untracked();
+        spawn_local(async move {
+            if let Some(window) = web_sys::window() {
+                let data = web_sys::ShareData::new();
+                data.set_text(&t);
+                // Rejects when the user cancels the share sheet; nothing to do.
+                let _ = JsFuture::from(window.navigator().share_with_data(&data)).await;
+            }
+        });
+    };
     let copy_state = RwSignal::new(CopyState::Idle);
     let count_fn = char_count.unwrap_or(templates::grapheme_count);
 
@@ -260,6 +294,27 @@ fn OutputCard(
                         </span>
                     })}
                 </div>
+                <div class="output-actions">
+                {mail_href.map(|href| view! {
+                    <a
+                        class="btn-copy btn-link"
+                        class:disabled=move || !enabled.get()
+                        href=move || enabled.get().then(|| href.get())
+                        aria-disabled=move || (!enabled.get()).to_string()
+                    >
+                        "E-Mail öffnen"
+                    </a>
+                })}
+                {can_share.then(|| view! {
+                    <button
+                        class="btn-copy"
+                        type="button"
+                        disabled=move || !enabled.get()
+                        on:click=on_share
+                    >
+                        "Teilen"
+                    </button>
+                })}
                 <button
                     class=move || match copy_state.get() {
                         CopyState::Idle => "btn-copy",
@@ -275,6 +330,7 @@ fn OutputCard(
                         CopyState::Failed => "Fehler",
                     }}
                 </button>
+                </div>
             </div>
             <textarea
                 class="output-text"

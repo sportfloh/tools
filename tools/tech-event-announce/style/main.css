@@ -299,3 +299,23 @@ html, body {
 }
 .settings[open] summary { margin-bottom: 10px; }
 .settings .form-field + .form-field { margin-top: 10px; }
+
+/* Link styled as a pill button (mailto) */
+.btn-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+.btn-link.disabled {
+  opacity: 0.38;
+  pointer-events: none;
+  border-color: var(--color-border);
+  color: var(--color-muted);
+}
+
+.output-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
