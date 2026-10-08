@@ -337,6 +337,24 @@ html, body {
 }
 .btn-delete-topic:active { transform: scale(.88); }
 
+/* Confirm button revealed by tapping the red circle */
+.btn-confirm-delete {
+  align-self: stretch;
+  margin: 8px 4px 8px 0;
+  padding: 0 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-danger);
+  color: white;
+  font-size: .875rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  animation: pop-in .15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-confirm-delete:active { background: var(--color-danger-dark); }
+
 @keyframes pop-in {
   from { transform: scale(0); }
   to   { transform: scale(1); }

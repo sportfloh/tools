@@ -123,6 +123,9 @@ pub(crate) struct Editing(pub(crate) RwSignal<bool>);
 pub(crate) struct ShowDetail(pub(crate) RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct ShowEventDetail(pub(crate) RwSignal<bool>);
+/// Id of the topic whose "−" was tapped and now shows a "Delete" confirm button.
+#[derive(Clone, Copy)]
+pub(crate) struct PendingDelete(pub(crate) RwSignal<Option<String>>);
 
 // Per-topic reactive signal list. Outer signal changes only on add/remove;
 // inner RwSignal<TopicHeader> changes only when that topic's counts change.
@@ -241,8 +244,18 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
     let toasts = use_context::<Toasts>().expect("toasts context");
+    let pending_delete = use_context::<PendingDelete>()
+        .expect("pending_delete context")
+        .0;
+    let is_pending_delete =
+        move || pending_delete.with(|p| p.as_deref() == Some(&topic_signal.with(|h| h.id.clone())));
 
     let add_event = move |_| {
+        if editing.get_untracked() {
+            // Edit mode never logs; a tap just cancels a pending delete.
+            pending_delete.set(None);
+            return;
+        }
         let Some(db) = get_db() else { return };
         let row = EventRow {
             id: new_id(),
@@ -274,8 +287,22 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
         });
     };
 
+    // "−" only arms the delete; the revealed "Delete" button performs it.
+    let arm_delete = move |ev: leptos::ev::MouseEvent| {
+        ev.stop_propagation();
+        let id = topic_signal.with_untracked(|h| h.id.clone());
+        pending_delete.update(|p| {
+            *p = if p.as_deref() == Some(&id) {
+                None
+            } else {
+                Some(id)
+            }
+        });
+    };
+
     let delete_topic = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
+        pending_delete.set(None);
         let id = topic_signal.with_untracked(|h| h.id.clone());
         let id2 = id.clone();
         if let Some(db) = get_db() {
@@ -301,7 +328,7 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     view! {
         <div class="topic-row">
             <Show when=move || editing.get()>
-                <button class="btn-delete-topic" on:click=delete_topic title="Delete topic">
+                <button class="btn-delete-topic" on:click=arm_delete title="Delete topic">
                     "−"
                 </button>
             </Show>
@@ -314,7 +341,14 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
                     }}
                 </span>
             </div>
-            <button class="btn-detail" on:click=go_detail title="Details">"›"</button>
+            <Show
+                when=is_pending_delete
+                fallback=move || view! {
+                    <button class="btn-detail" on:click=go_detail title="Details">"›"</button>
+                }
+            >
+                <button class="btn-confirm-delete" on:click=delete_topic>"Delete"</button>
+            </Show>
         </div>
     }
 }
@@ -967,6 +1001,21 @@ pub fn App() -> impl IntoView {
     provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
     provide_context(ShowEventDetail(show_event_detail));
+    let pending_delete = RwSignal::new(None::<String>);
+    provide_context(PendingDelete(pending_delete));
+    // Leaving edit mode cancels an armed delete.
+    Effect::new(move |_| {
+        if !editing.get() {
+            pending_delete.set(None);
+        }
+    });
+    // The Edit/Done button disappears with the last topic, so leave edit mode
+    // too; otherwise a topic added next would ignore taps.
+    Effect::new(move |_| {
+        if topic_list.with(Vec::is_empty) {
+            editing.set(false);
+        }
+    });
     provide_context(event_detail_ev);
 
     // ── Foreground detection: refresh counts when a new day has started ───────
