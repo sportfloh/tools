@@ -266,17 +266,20 @@ pub(crate) async fn add_event_and_update_header_idb(
     tx.done().await.is_ok()
 }
 
-pub(crate) async fn delete_event_idb(db: &Rexie, event_id: &str) {
+/// Delete one event. Returns whether the transaction committed.
+pub(crate) async fn delete_event_idb(db: &Rexie, event_id: &str) -> bool {
     let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
         Ok(t) => t,
-        Err(_) => return,
+        Err(_) => return false,
     };
     let store = match tx.store("events") {
         Ok(s) => s,
-        Err(_) => return,
+        Err(_) => return false,
     };
-    store.delete(JsValue::from_str(event_id)).await.ok();
-    tx.done().await.ok();
+    if store.delete(JsValue::from_str(event_id)).await.is_err() {
+        return false;
+    }
+    tx.done().await.is_ok()
 }
 
 pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {

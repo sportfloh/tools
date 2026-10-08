@@ -165,6 +165,17 @@ impl Toasts {
         });
     }
 
+    pub(crate) fn show_with_undo(
+        self,
+        message: impl Into<String>,
+        undo: impl Fn() + Send + Sync + 'static,
+    ) {
+        self.push(Toast {
+            message: message.into(),
+            undo: Some(std::sync::Arc::new(undo)),
+        });
+    }
+
     fn push(self, toast: Toast) {
         let generation = self.generation.get_value() + 1;
         self.generation.set_value(generation);
@@ -229,6 +240,7 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     let editing = use_context::<Editing>().expect("editing context").0;
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
+    let toasts = use_context::<Toasts>().expect("toasts context");
 
     let add_event = move |_| {
         let Some(db) = get_db() else { return };
@@ -240,7 +252,25 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
             ..Default::default()
         };
         spawn_local(async move {
-            record_event(&db, row, topic_signal, |_| {}, |_| {}).await;
+            record_event(
+                &db,
+                row,
+                topic_signal,
+                |row| {
+                    let event_id = row.id.clone();
+                    let name = topic_signal.with_untracked(|h| h.name.clone());
+                    toasts.show_with_undo(format!("Logged in {name}"), move || {
+                        let event_id = event_id.clone();
+                        spawn_local(async move {
+                            if let Some(db) = get_db() {
+                                undo_logged_event(&db, &event_id, topic_signal).await;
+                            }
+                        });
+                    });
+                },
+                |_| {},
+            )
+            .await;
         });
     };
 
@@ -299,6 +329,7 @@ pub fn TopicDetail() -> impl IntoView {
         .0;
     let event_detail_ev =
         use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
+    let toasts = use_context::<Toasts>().expect("toasts context");
 
     let show_add_modal: RwSignal<bool> = RwSignal::new(false);
     let manual_dt: RwSignal<String> = RwSignal::new(String::new());
@@ -393,6 +424,18 @@ pub fn TopicDetail() -> impl IntoView {
                     |row| {
                         events.update(|evs| evs.insert(0, row.clone()));
                         all_evs.update_value(|v| v.insert(0, row.clone()));
+                        let event_id = row.id.clone();
+                        let name = sig.with_untracked(|h| h.name.clone());
+                        toasts.show_with_undo(format!("Logged in {name}"), move || {
+                            let event_id = event_id.clone();
+                            events.update(|evs| evs.retain(|e| e.id != event_id));
+                            all_evs.update_value(|v| v.retain(|e| e.id != event_id));
+                            spawn_local(async move {
+                                if let Some(db) = get_db() {
+                                    undo_logged_event(&db, &event_id, sig).await;
+                                }
+                            });
+                        });
                     },
                     |row| {
                         let replace = |v: &mut Vec<EventRow>| {
@@ -702,6 +745,22 @@ fn parse_add_param_raw(search: &str) -> Option<&str> {
         }
     }
     None
+}
+
+/// Undo a just-logged event: delete it and recompute the topic's counts from
+/// what is left. Returns whether the event was deleted. A GPS fix that
+/// arrives afterwards is dropped by `enrich_event_idb`.
+pub(crate) async fn undo_logged_event(
+    db: &Rexie,
+    event_id: &str,
+    header: RwSignal<TopicHeader>,
+) -> bool {
+    if !delete_event_idb(db, event_id).await {
+        return false;
+    }
+    let fresh = refresh_topic_counts_idb(db, &header.get_untracked()).await;
+    header.set(fresh);
+    true
 }
 
 // ─── Topic signals ────────────────────────────────────────────────────────────
@@ -1213,6 +1272,30 @@ mod tests {
         let h = sig.get_untracked();
         assert_eq!(h.count_total, 1, "total should be 1 after refresh");
         assert_ne!(h.count_today, 99, "today should not be stale 99");
+    }
+
+    /// Undo removes the event and brings the topic's counts back down.
+    #[wasm_bindgen_test]
+    async fn undo_logged_event_restores_counts() {
+        let db = open_db().await.unwrap();
+        let header = TopicHeader::new(new_id(), "undo-test".into());
+        save_topic_header(&db, &header).await;
+        let sig = RwSignal::new(header);
+
+        let row = EventRow {
+            id: new_id(),
+            topic_id: sig.with_untracked(|h| h.id.clone()),
+            timestamp: now_timestamp(),
+            timestamp_ms: js_sys::Date::now(),
+            ..Default::default()
+        };
+        record_event(&db, row.clone(), sig, |_| {}, |_| {}).await;
+        assert_eq!(sig.get_untracked().count_total, 1);
+
+        assert!(undo_logged_event(&db, &row.id, sig).await);
+        assert_eq!(sig.get_untracked().counts(), Default::default());
+        let topic_id = sig.with_untracked(|h| h.id.clone());
+        assert!(load_events_for_topic(&db, &topic_id).await.is_empty());
     }
 
     /// A topic added from the `<Show when=adding>` form must survive that
