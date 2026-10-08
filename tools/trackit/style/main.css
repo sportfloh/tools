@@ -34,6 +34,25 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ── Accessibility helpers ───────────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+/* Hidden visually but still focusable (file inputs inside header labels) */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.header-btn-import:focus-within {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
 /* ── App shell & navigation screens ──────────────────────────────────────── */
 /*
  * position:fixed takes the app out of document flow entirely — there is
@@ -150,7 +169,7 @@ html, body {
 
 .header-btn-left   { justify-content: flex-start; }
 .header-btn-right  { justify-content: flex-end; font-size: 1.5rem; font-weight: 300; }
-.header-btn-import { cursor: pointer; font-size: 1.1rem; min-width: 44px; }
+.header-btn-import { position: relative; cursor: pointer; font-size: 1.1rem; min-width: 44px; }
 .header-btn-back   { justify-content: flex-start; font-size: 1.0625rem; }
 
 .header-right {
@@ -267,11 +286,16 @@ html, body {
   gap: 8px;
 }
 
-/* Tappable area — tracks an event on press */
+/* Tappable area — tracks an event on press (a <button>, reset to look plain) */
 .topic-row-main {
   flex: 1;
   min-width: 0;
   padding: 12px 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
   user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -386,8 +410,13 @@ html, body {
 }
 .event-item:last-child { border-bottom: none; }
 
-/* Slides left to reveal the delete button on swipe */
+/* Slides left to reveal the delete button on swipe (a <button>, reset) */
 .event-item-content {
+  width: 100%;
+  border: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -431,6 +460,8 @@ html, body {
 @media (hover: hover) {
   .event-item:hover .btn-delete-swipe { transform: translateX(0); }
 }
+/* Keyboard users reach the delete button by tabbing to it */
+.btn-delete-swipe:focus-visible { transform: translateX(0); }
 
 .event-empty {
   padding: 24px 16px;

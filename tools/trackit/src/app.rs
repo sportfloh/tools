@@ -328,11 +328,22 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     view! {
         <div class="topic-row">
             <Show when=move || editing.get()>
-                <button class="btn-delete-topic" on:click=arm_delete title="Delete topic">
+                <button
+                    class="btn-delete-topic"
+                    type="button"
+                    on:click=arm_delete
+                    title="Delete topic"
+                    aria-label=move || format!("Delete topic {}", topic_name.get())
+                >
                     "−"
                 </button>
             </Show>
-            <div class="topic-row-main" on:click=add_event>
+            <button
+                class="topic-row-main"
+                type="button"
+                on:click=add_event
+                aria-label=move || format!("Log event for {}", topic_name.get())
+            >
                 <span class="topic-row-name">{topic_name}</span>
                 <span class="topic-row-counts">
                     {move || {
@@ -340,14 +351,29 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
                         format!("{} today · {} wk · {} mo · {} total", today, week, month, total)
                     }}
                 </span>
-            </div>
+            </button>
             <Show
                 when=is_pending_delete
                 fallback=move || view! {
-                    <button class="btn-detail" on:click=go_detail title="Details">"›"</button>
+                    <button
+                        class="btn-detail"
+                        type="button"
+                        on:click=go_detail
+                        title="Details"
+                        aria-label=move || format!("Details for {}", topic_name.get())
+                    >
+                        "›"
+                    </button>
                 }
             >
-                <button class="btn-confirm-delete" on:click=delete_topic>"Delete"</button>
+                <button
+                    class="btn-confirm-delete"
+                    type="button"
+                    on:click=delete_topic
+                    aria-label=move || format!("Confirm deleting {}", topic_name.get())
+                >
+                    "Delete"
+                </button>
             </Show>
         </div>
     }
@@ -523,8 +549,8 @@ pub fn TopicDetail() -> impl IntoView {
                     <button class="header-btn header-btn-back" on:click=go_back>"‹ Back"</button>
                     <h1>{topic_name}</h1>
                     <div class="header-right">
-                        <button class="header-btn header-btn-right" on:click=do_export title="Export to .txt">"↓"</button>
-                        <button class="header-btn header-btn-right" on:click=open_add_modal title="Log event manually">"+"</button>
+                        <button class="header-btn header-btn-right" type="button" on:click=do_export title="Export to .txt" aria-label="Export topic as text file">"↓"</button>
+                        <button class="header-btn header-btn-right" type="button" on:click=open_add_modal title="Log event manually" aria-label="Log event manually">"+"</button>
                     </div>
                 </div>
             </header>
@@ -607,10 +633,10 @@ pub fn TopicDetail() -> impl IntoView {
                                         on:touchstart=on_touch_start_row
                                         on:touchend=on_touch_end_row
                                     >
-                                        <div class="event-item-content" on:click=open_event_detail>
-                                            <span class="event-icon">"🕐"</span>
+                                        <button class="event-item-content" type="button" on:click=open_event_detail>
+                                            <span class="event-icon" aria-hidden="true">"🕐"</span>
                                             <span class="event-time">{format_timestamp(&ts_str)}</span>
-                                        </div>
+                                        </button>
                                         <button
                                             class="btn-delete-swipe"
                                             on:click=delete_event
@@ -1192,21 +1218,25 @@ pub fn App() -> impl IntoView {
                         <div class="header-right">
                             <button
                                 class="header-btn"
+                                type="button"
                                 title="Export all topics (JSON)"
+                                aria-label="Export all topics as JSON backup"
                                 on:click=on_export_all
                             >
                                 "⬇"
                             </button>
                             <label class="header-btn header-btn-import" title="Import all topics (JSON)">
                                 "⬆"
-                                <input type="file" accept=".json" style="display:none" on:change=on_import_json />
+                                <input type="file" accept=".json" class="visually-hidden" aria-label="Import JSON backup" on:change=on_import_json />
                             </label>
                             <label class="header-btn header-btn-import" title="Import topic from .txt">
                                 "↑"
-                                <input type="file" accept=".txt" style="display:none" on:change=on_import />
+                                <input type="file" accept=".txt" class="visually-hidden" aria-label="Import topic from text file" on:change=on_import />
                             </label>
                             <button
                                 class="header-btn header-btn-right"
+                                type="button"
+                                aria-label=move || if adding.get() { "Cancel adding topic" } else { "Add topic" }
                                 on:click=move |_| {
                                     let now_adding = !adding.get();
                                     adding.set(now_adding);
