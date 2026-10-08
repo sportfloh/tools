@@ -15,20 +15,13 @@
 
   <!-- Trunk bundles -->
   <link data-trunk rel="rust" data-bin="tech-event-announce"/>
+  <link data-trunk rel="css" href="../_shared/base.css"/>
   <link data-trunk rel="css" href="style/main.css"/>
   <link data-trunk rel="copy-file" href="manifest.json"/>
-  <link data-trunk rel="copy-file" href="public/service-worker.js"/>
+  <link data-trunk rel="copy-file" href="../_shared/service-worker.js"/>
   <link data-trunk rel="copy-file" href="public/icon.svg"/>
 
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function() {
-        navigator.serviceWorker.register('./service-worker.js').catch(function(err) {
-          console.log('ServiceWorker registration failed:', err);
-        });
-      });
-    }
-  </script>
+  <link data-trunk rel="inline" href="../_shared/register-sw.js"/>
 </head>
 <body></body>
 </html>

@@ -8,6 +8,7 @@ on:
       - 'tools/trackit/**'
       - 'tools/tech-event-announce/**'
       - 'tools/index.html'
+      - 'tools/_shared/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -18,6 +19,8 @@ on:
 # to run on Node.js 24. Remove once deploy-pages ships a node24 build.
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Pinned tool versions (keep in sync with CLAUDE.md "Tooling versions").
+  TRUNK_VERSION: 0.21.14
 
 permissions:
   contents: read
@@ -49,11 +52,15 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@main
+      # A merged PR can land before its CI finished; never deploy failing code.
+      - name: Native tests
+        run: cargo test --lib
 
-      - name: Install trunk
-        run: cargo binstall trunk --no-confirm
+      - name: Install trunk ${{ env.TRUNK_VERSION }}
+        run: |
+          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz -C "$HOME/.cargo/bin" trunk
+          trunk --version
 
       - name: Build trackit
         working-directory: tools/trackit

@@ -1,37 +1,13 @@
-/* ── Reset & base ─────────────────────────────────────────────────────────── */
-*, *::before, *::after {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
+/* Reset, shared colour tokens, header and scrollbar: tools/_shared/base.css */
 
+/* ── Tool-specific tokens ─────────────────────────────────────────────────── */
 :root {
-  color-scheme: light;
-  --color-primary:      #4a90e2;
-  --color-primary-dark: #2e6fbf;
   --color-danger:       #e25454;
   --color-danger-dark:  #bf2e2e;
   --color-danger-bg:    #fdeaea;
-  --color-bg:           #f2f2f7;
-  --color-surface:      #ffffff;
-  --color-border:       #e0e6ed;
-  --color-text:         #1a2332;
-  --color-muted:        #6b7a8d;
-  --radius:             12px;
-  --shadow:             0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
-  --shadow-hover:       0 4px 16px rgba(0,0,0,.12), 0 0 1px rgba(0,0,0,.08);
   --header-shadow:      0 1px 0 rgba(0,0,0,.15);
   --nav-duration:       0.32s;
   --nav-ease:           cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-html, body {
-  height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: var(--color-bg);
-  color: var(--color-text);
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
 }
 
 /* ── Accessibility helpers ───────────────────────────────────────────────── */
@@ -116,29 +92,12 @@ html, body {
 }
 
 /* ── iOS-style navigation header ─────────────────────────────────────────── */
-.app-header {
-  background: #1c1c1e;
-  color: white;
-  flex-shrink: 0;
-  z-index: 10;
-  /* Thin separator line to distinguish header from list content */
-  border-bottom: 1px solid rgba(255,255,255,.12);
-  /* Respect iPhone notch / Dynamic Island */
-  padding-top: env(safe-area-inset-top, 0px);
-}
-
 .header-bar {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  height: 44px;
   padding: 0 4px;
 }
 
 .header-bar h1 {
-  font-size: 1.0625rem;
-  font-weight: 600;
-  letter-spacing: -.25px;
   flex: 1;
   text-align: center;
   pointer-events: none;
@@ -692,9 +651,6 @@ html, body {
 }
 
 /* ── Scrollbar ────────────────────────────────────────────────────────────── */
-.app-main::-webkit-scrollbar        { width: 4px; }
-.app-main::-webkit-scrollbar-track  { background: transparent; }
-.app-main::-webkit-scrollbar-thumb  { background: var(--color-border); border-radius: 2px; }
 
 /* ── Mobile tweaks ────────────────────────────────────────────────────────── */
 @media (max-width: 480px) {
@@ -705,18 +661,9 @@ html, body {
 /* ── Colour schemes ───────────────────────────────────────────────────────── */
 @media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: dark;
-    --color-primary:      #5b9fe8;
     --color-primary-dark: #4a90e2;
     --color-danger-bg:    rgba(226,84,84,.15);
     --header-shadow:      0 1px 0 rgba(0,0,0,.40);
-    --color-bg:           #000000;
-    --color-surface:      #1c1c1e;
-    --color-border:       #38383a;
-    --color-text:         #e6edf3;
-    --color-muted:        #8e8e93;
-    --shadow:             0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
-    --shadow-hover:       0 4px 16px rgba(0,0,0,.55), 0 0 1px rgba(0,0,0,.40);
   }
 }
 
@@ -746,9 +693,6 @@ html, body {
 
 /* Re-invert the header under Smart Invert so it keeps its dark-gray look.
  * filter:invert(1) cancels out the OS-level inversion for this element only. */
-@media (inverted-colors: inverted) {
-  .app-header { filter: invert(1); }
-}
 
 /* light CSS + OS inversion → perceived dark; native UI should follow */
 @media (prefers-color-scheme: light) and (inverted-colors: inverted) {
