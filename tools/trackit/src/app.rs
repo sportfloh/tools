@@ -128,6 +128,99 @@ pub(crate) struct ShowEventDetail(pub(crate) RwSignal<bool>);
 // inner RwSignal<TopicHeader> changes only when that topic's counts change.
 pub(crate) type TopicList = RwSignal<Vec<RwSignal<TopicHeader>>>;
 
+// ─── Toasts ───────────────────────────────────────────────────────────────────
+
+const TOAST_DURATION: std::time::Duration = std::time::Duration::from_millis(4000);
+
+/// A short message shown at the bottom of the screen, optionally with Undo.
+/// The undo action is a plain `Arc<dyn Fn>` rather than a Leptos `Callback`,
+/// which would be owned by (and disposed with) the scope that created it.
+#[derive(Clone)]
+pub(crate) struct Toast {
+    pub message: String,
+    pub undo: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// Copyable handle (provided via context) for showing toasts. A newer toast
+/// replaces the current one; the generation counter keeps an older timer
+/// from hiding it early.
+#[derive(Clone, Copy)]
+pub(crate) struct Toasts {
+    current: RwSignal<Option<Toast>>,
+    generation: StoredValue<u64>,
+}
+
+impl Toasts {
+    fn new() -> Self {
+        Toasts {
+            current: RwSignal::new(None),
+            generation: StoredValue::new(0),
+        }
+    }
+
+    pub(crate) fn show(self, message: impl Into<String>) {
+        self.push(Toast {
+            message: message.into(),
+            undo: None,
+        });
+    }
+
+    fn push(self, toast: Toast) {
+        let generation = self.generation.get_value() + 1;
+        self.generation.set_value(generation);
+        self.current.set(Some(toast));
+        set_timeout(
+            move || {
+                if self.generation.get_value() == generation {
+                    self.current.set(None);
+                }
+            },
+            TOAST_DURATION,
+        );
+    }
+
+    fn dismiss(self) {
+        self.current.set(None);
+    }
+}
+
+#[component]
+pub fn ToastBar() -> impl IntoView {
+    let toasts = use_context::<Toasts>().expect("toasts context");
+    let message = move || {
+        toasts
+            .current
+            .with(|t| t.as_ref().map(|t| t.message.clone()).unwrap_or_default())
+    };
+    let undo = move || {
+        toasts
+            .current
+            .with(|t| t.as_ref().and_then(|t| t.undo.clone()))
+    };
+    view! {
+        // Always rendered so screen readers pick up changes in the live region.
+        <div class="toast-region" role="status" aria-live="polite">
+            <Show when=move || toasts.current.with(Option::is_some)>
+                <div class="toast">
+                    <span class="toast-message">{message}</span>
+                    {move || undo().map(|undo| view! {
+                        <button
+                            class="toast-undo"
+                            type="button"
+                            on:click=move |_| {
+                                toasts.dismiss();
+                                undo();
+                            }
+                        >
+                            "Undo"
+                        </button>
+                    })}
+                </div>
+            </Show>
+        </div>
+    }
+}
+
 // ─── Components ──────────────────────────────────────────────────────────────
 
 #[component]
@@ -684,6 +777,38 @@ pub(crate) async fn import_into_topic(
     Some(ImportOutcome { added, duplicates })
 }
 
+impl std::ops::Add for ImportOutcome {
+    type Output = ImportOutcome;
+    fn add(self, o: ImportOutcome) -> ImportOutcome {
+        ImportOutcome {
+            added: self.added + o.added,
+            duplicates: self.duplicates + o.duplicates,
+        }
+    }
+}
+
+/// "1 event", "3 events".
+pub(crate) fn count_noun(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{n} {noun}s")
+    }
+}
+
+/// Toast text after an import, e.g.
+/// "Imported 120 events into Running (15 duplicates skipped)".
+pub(crate) fn import_message(scope: &str, o: ImportOutcome) -> String {
+    let mut msg = format!("Imported {} {scope}", count_noun(o.added, "event"));
+    if o.duplicates > 0 {
+        msg.push_str(&format!(
+            " ({} skipped)",
+            count_noun(o.duplicates, "duplicate")
+        ));
+    }
+    msg
+}
+
 // ─── Foreground refresh helper ────────────────────────────────────────────────
 
 /// Recompute and persist every topic's counts from its stored events,
@@ -701,6 +826,7 @@ pub(crate) async fn refresh_all_topic_counts(db: &Rexie, topic_list: TopicList) 
 #[component]
 pub fn App() -> impl IntoView {
     let topic_list: TopicList = RwSignal::new(Vec::new());
+    let toasts = Toasts::new();
     // Copy handle to the App's owner, for creating topic signals from handlers.
     let app_owner = StoredValue::new_local(Owner::current().expect("App runs inside an owner"));
     let db_ready_signal = RwSignal::new(false);
@@ -777,6 +903,7 @@ pub fn App() -> impl IntoView {
     });
 
     provide_context(topic_list);
+    provide_context(toasts);
     provide_context(Editing(editing));
     provide_context(ShowDetail(show_detail));
     provide_context(detail_id);
@@ -834,7 +961,11 @@ pub fn App() -> impl IntoView {
             let new_rows: Vec<EventRow> = text.lines().filter_map(parse_import_line).collect();
             let Some(db) = get_db() else { return };
             spawn_local(async move {
-                import_into_topic(&db, topic_list, app_owner, topic_name, new_rows).await;
+                let scope = format!("into {topic_name}");
+                match import_into_topic(&db, topic_list, app_owner, topic_name, new_rows).await {
+                    Some(outcome) => toasts.show(import_message(&scope, outcome)),
+                    None => toasts.show("Import failed"),
+                }
             });
         });
 
@@ -872,21 +1003,35 @@ pub fn App() -> impl IntoView {
         let on_load = Closure::once(move |_: JsValue| {
             let text = reader_clone.result().unwrap().as_string().unwrap();
             let Some(bulk) = parse_bulk_import(&text) else {
+                toasts.show("Not a trackit backup");
                 return;
             };
             let Some(db) = get_db() else { return };
 
             spawn_local(async move {
+                let topics = bulk.topics.len();
+                let mut total = ImportOutcome::default();
+                let mut failed = false;
                 for topic_export in bulk.topics {
-                    import_into_topic(
+                    match import_into_topic(
                         &db,
                         topic_list,
                         app_owner,
                         topic_export.name,
                         topic_export.events,
                     )
-                    .await;
+                    .await
+                    {
+                        Some(outcome) => total = total + outcome,
+                        None => failed = true,
+                    }
                 }
+                let scope = format!("from {}", count_noun(topics, "topic"));
+                let mut msg = import_message(&scope, total);
+                if failed {
+                    msg.push_str(" – some topics failed");
+                }
+                toasts.show(msg);
             });
         });
 
@@ -1020,6 +1165,8 @@ pub fn App() -> impl IntoView {
             >
                 <EventDetail />
             </div>
+
+            <ToastBar />
         </div>
     }
 }
@@ -1083,6 +1230,49 @@ mod tests {
         assert!(
             sig.try_get_untracked().is_some(),
             "topic signal was disposed with the handler scope"
+        );
+    }
+
+    #[test]
+    fn count_noun_singular_and_plural() {
+        assert_eq!(count_noun(0, "topic"), "0 topics");
+        assert_eq!(count_noun(1, "topic"), "1 topic");
+        assert_eq!(count_noun(3, "event"), "3 events");
+    }
+
+    #[test]
+    fn import_message_with_duplicates() {
+        let o = ImportOutcome {
+            added: 120,
+            duplicates: 15,
+        };
+        assert_eq!(
+            import_message("into Running", o),
+            "Imported 120 events into Running (15 duplicates skipped)"
+        );
+    }
+
+    #[test]
+    fn import_message_singular() {
+        let o = ImportOutcome {
+            added: 1,
+            duplicates: 1,
+        };
+        assert_eq!(
+            import_message("into Yoga", o),
+            "Imported 1 event into Yoga (1 duplicate skipped)"
+        );
+    }
+
+    #[test]
+    fn import_message_without_duplicates() {
+        let o = ImportOutcome {
+            added: 2,
+            duplicates: 0,
+        };
+        assert_eq!(
+            import_message("from 2 topics", o),
+            "Imported 2 events from 2 topics"
         );
     }
 

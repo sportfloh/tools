@@ -662,3 +662,48 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 .event-item-content:active { opacity: .6; }
+
+/* ── Toast ───────────────────────────────────────────────────────────────── */
+.toast-region {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(16px + env(safe-area-inset-bottom));
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+  z-index: 100;
+}
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  padding: 10px 10px 10px 16px;
+  border-radius: 22px;
+  background: #1c1c1e;
+  color: #fff;
+  font-size: .9rem;
+  box-shadow: var(--shadow-hover);
+  animation: toast-in .2s var(--nav-ease);
+}
+.toast-message {
+  overflow-wrap: anywhere;
+}
+.toast-undo {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, .14);
+  color: #8ec1ff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: none; }
+}
