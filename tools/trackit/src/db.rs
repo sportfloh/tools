@@ -75,6 +75,9 @@ pub struct EventRow {
     pub accuracy: Option<f64>,
     #[serde(default)]
     pub altitude_accuracy: Option<f64>,
+    /// Free-text note, editable in the event detail screen.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 // ─── Thread-local DB handle ───────────────────────────────────────────────────
@@ -240,9 +243,10 @@ pub(crate) async fn add_events_bulk_idb(db: &Rexie, rows: &[EventRow]) -> bool {
     tx.done().await.is_ok()
 }
 
-/// Overwrite `row` (e.g. with a GPS fix) only if an event with its id is
-/// still stored. Returns whether the row was written.
-pub(crate) async fn enrich_event_idb(db: &Rexie, row: &EventRow) -> bool {
+/// Overwrite `row` (note, timestamp, …) only if an event with its id is still
+/// stored, so an edit can never resurrect a deleted event. Returns whether
+/// the row was written.
+pub(crate) async fn update_event_idb(db: &Rexie, row: &EventRow) -> bool {
     let tx = match db.transaction(&["events"], TransactionMode::ReadWrite) {
         Ok(t) => t,
         Err(_) => return false,
@@ -262,6 +266,43 @@ pub(crate) async fn enrich_event_idb(db: &Rexie, row: &EventRow) -> bool {
         return false;
     }
     tx.done().await.is_ok()
+}
+
+/// One GPS reading, as attached to an event after it was logged.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct GpsFix {
+    pub lat: f64,
+    pub lon: f64,
+    pub altitude: Option<f64>,
+    pub heading: Option<f64>,
+    pub speed: Option<f64>,
+    pub accuracy: f64,
+    pub altitude_accuracy: Option<f64>,
+}
+
+/// Attach `gps` to the *stored* event `event_id` (so a note written while the
+/// fix was pending is kept) and return the updated row. `None` if the event
+/// no longer exists or the write failed.
+pub(crate) async fn enrich_gps_idb(db: &Rexie, event_id: &str, gps: &GpsFix) -> Option<EventRow> {
+    let tx = db
+        .transaction(&["events"], TransactionMode::ReadWrite)
+        .ok()?;
+    let store = tx.store("events").ok()?;
+    // get + put in one readwrite transaction, so a delete or an edit cannot
+    // slip in between.
+    let stored = store.get(JsValue::from_str(event_id)).await.ok()??;
+    let mut row: EventRow = serde_wasm_bindgen::from_value(stored).ok()?;
+    row.lat = Some(gps.lat);
+    row.lon = Some(gps.lon);
+    row.altitude = gps.altitude;
+    row.heading = gps.heading;
+    row.speed = gps.speed;
+    row.accuracy = Some(gps.accuracy);
+    row.altitude_accuracy = gps.altitude_accuracy;
+    let val = serde_wasm_bindgen::to_value(&row).ok()?;
+    store.put(&val, None).await.ok()?;
+    tx.done().await.ok()?;
+    Some(row)
 }
 
 pub(crate) async fn add_event_and_update_header_idb(
@@ -340,10 +381,10 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        EventRow, TopicHeader, add_event_and_update_header_idb, add_event_idb, add_events_bulk_idb,
-        delete_event_idb, delete_topic_idb, enrich_event_idb, load_events_for_topic,
-        load_topic_headers, open_db, open_db_named, refresh_topic_counts_idb, save_topic_header,
-        save_topic_headers_idb,
+        EventRow, GpsFix, TopicHeader, add_event_and_update_header_idb, add_event_idb,
+        add_events_bulk_idb, delete_event_idb, delete_topic_idb, enrich_gps_idb,
+        load_events_for_topic, load_topic_headers, open_db, open_db_named,
+        refresh_topic_counts_idb, save_topic_header, save_topic_headers_idb, update_event_idb,
     };
     use wasm_bindgen_test::*;
 
@@ -558,7 +599,7 @@ mod wasm_tests {
 
     // IDB: enriching an event that was deleted meanwhile must not bring it back
     #[wasm_bindgen_test]
-    async fn idb_enrich_does_not_resurrect_deleted_event() {
+    async fn idb_update_event_does_not_resurrect_deleted_event() {
         let db = open_db().await.unwrap();
         let ev = test_event("ev-enrich-del", "topic-enrich-1", 1_000.0);
         add_event_idb(&db, &ev).await;
@@ -568,7 +609,7 @@ mod wasm_tests {
             lat: Some(48.1),
             ..ev
         };
-        assert!(!enrich_event_idb(&db, &enriched).await, "nothing to enrich");
+        assert!(!update_event_idb(&db, &enriched).await, "nothing to enrich");
 
         let events = load_events_for_topic(&db, "topic-enrich-1").await;
         assert!(
@@ -579,7 +620,7 @@ mod wasm_tests {
 
     // IDB: enriching an existing event overwrites it in place
     #[wasm_bindgen_test]
-    async fn idb_enrich_updates_existing_event() {
+    async fn idb_update_event_overwrites_existing_event() {
         let db = open_db().await.unwrap();
         let ev = test_event("ev-enrich-upd", "topic-enrich-2", 1_000.0);
         add_event_idb(&db, &ev).await;
@@ -589,7 +630,7 @@ mod wasm_tests {
             lon: Some(11.5),
             ..ev
         };
-        assert!(enrich_event_idb(&db, &enriched).await);
+        assert!(update_event_idb(&db, &enriched).await);
 
         let events = load_events_for_topic(&db, "topic-enrich-2").await;
         assert_eq!(events.len(), 1);
@@ -665,5 +706,81 @@ mod wasm_tests {
             .map(|h| h.id)
             .collect();
         assert_eq!(loaded, ["o-1", "o-2", "o-3"]);
+    }
+
+    fn fix() -> GpsFix {
+        GpsFix {
+            lat: 48.137,
+            lon: 11.575,
+            altitude: Some(520.0),
+            heading: None,
+            speed: None,
+            accuracy: 5.0,
+            altitude_accuracy: None,
+        }
+    }
+
+    // IDB: a note written while the GPS fix was pending survives the fix
+    #[wasm_bindgen_test]
+    async fn idb_enrich_gps_keeps_note() {
+        let db = open_db().await.unwrap();
+        let ev = test_event("ev-gps-note", "topic-gps-1", 1_000.0);
+        add_event_idb(&db, &ev).await;
+        let with_note = EventRow {
+            note: Some("felt great".into()),
+            ..ev.clone()
+        };
+        assert!(update_event_idb(&db, &with_note).await);
+
+        let enriched = enrich_gps_idb(&db, &ev.id, &fix())
+            .await
+            .expect("event exists");
+        assert_eq!(enriched.note.as_deref(), Some("felt great"));
+        assert_eq!(
+            (enriched.lat, enriched.altitude),
+            (Some(48.137), Some(520.0))
+        );
+
+        let stored = load_events_for_topic(&db, "topic-gps-1").await;
+        assert_eq!(stored, vec![enriched]);
+    }
+
+    // IDB: a GPS fix for a deleted event writes nothing
+    #[wasm_bindgen_test]
+    async fn idb_enrich_gps_skips_deleted_event() {
+        let db = open_db().await.unwrap();
+        let ev = test_event("ev-gps-del", "topic-gps-2", 1_000.0);
+        add_event_idb(&db, &ev).await;
+        delete_event_idb(&db, &ev.id).await;
+        assert_eq!(enrich_gps_idb(&db, &ev.id, &fix()).await, None);
+        assert!(load_events_for_topic(&db, "topic-gps-2").await.is_empty());
+    }
+
+    // IDB: moving an event's timestamp back a few days updates the counts
+    #[wasm_bindgen_test]
+    async fn idb_update_event_changes_timestamp_and_counts() {
+        let db = open_db().await.unwrap();
+        let header = test_header("topic-move-1", "Move");
+        save_topic_header(&db, &header).await;
+        let now = js_sys::Date::now();
+        let ev = test_event("ev-move-1", "topic-move-1", now);
+        add_event_idb(&db, &ev).await;
+        assert_eq!(refresh_topic_counts_idb(&db, &header).await.count_today, 1);
+
+        let three_days_ago = now - 3.0 * 86_400_000.0;
+        let moved = EventRow {
+            timestamp: js_sys::Date::new(&three_days_ago.into())
+                .to_iso_string()
+                .as_string()
+                .unwrap(),
+            timestamp_ms: three_days_ago,
+            ..ev
+        };
+        assert!(update_event_idb(&db, &moved).await);
+        let counts = refresh_topic_counts_idb(&db, &header).await;
+        assert_eq!(
+            (counts.count_today, counts.count_week, counts.count_total),
+            (0, 1, 1)
+        );
     }
 }

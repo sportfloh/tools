@@ -1,14 +1,15 @@
 use crate::db::{
-    DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_events_bulk_idb,
-    delete_event_idb, delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic,
+    DB, EventRow, GpsFix, TopicHeader, add_event_and_update_header_idb, add_events_bulk_idb,
+    delete_event_idb, delete_topic_idb, enrich_gps_idb, get_db, load_events_for_topic,
     load_topic_headers, open_db, refresh_topic_counts_idb, save_topic_header,
-    save_topic_headers_idb,
+    save_topic_headers_idb, update_event_idb,
 };
 use crate::time::{
     Direction, NameError, average_interval_ms, bucket_counts, day_starts, event_row_counts,
-    export_all, export_topic, format_interval, format_timestamp, merge_new_events, move_item,
-    new_id, now_local_datetime_str, now_timestamp, parse_bulk_import, parse_import_line,
-    short_day_label, time_boundaries, validate_topic_name, week_starts, with_added_event,
+    export_all, export_topic, format_interval, format_timestamp, local_datetime_str,
+    merge_new_events, move_item, new_id, now_local_datetime_str, now_timestamp, parse_bulk_import,
+    parse_import_line, short_day_label, time_boundaries, validate_topic_name, week_starts,
+    with_added_event,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -19,17 +20,7 @@ use wasm_bindgen_futures::JsFuture;
 
 // ─── GPS snapshot ─────────────────────────────────────────────────────────────
 
-struct GpsSnapshot {
-    lat: f64,
-    lon: f64,
-    altitude: Option<f64>,
-    heading: Option<f64>,
-    speed: Option<f64>,
-    accuracy: f64,
-    altitude_accuracy: Option<f64>,
-}
-
-async fn get_gps() -> Option<GpsSnapshot> {
+async fn get_gps() -> Option<GpsFix> {
     let window = web_sys::window()?;
     let geo = window.navigator().geolocation().ok()?;
     let promise = js_sys::Promise::new(&mut |resolve, reject| {
@@ -61,7 +52,7 @@ async fn get_gps() -> Option<GpsSnapshot> {
     let altitude_accuracy = get("altitudeAccuracy").and_then(|v| v.as_f64());
     let heading = get("heading").and_then(|v| v.as_f64());
     let speed = get("speed").and_then(|v| v.as_f64());
-    Some(GpsSnapshot {
+    Some(GpsFix {
         lat,
         lon,
         altitude,
@@ -70,21 +61,6 @@ async fn get_gps() -> Option<GpsSnapshot> {
         accuracy,
         altitude_accuracy,
     })
-}
-
-impl GpsSnapshot {
-    fn applied_to(self, row: EventRow) -> EventRow {
-        EventRow {
-            lat: Some(self.lat),
-            lon: Some(self.lon),
-            altitude: self.altitude,
-            heading: self.heading,
-            speed: self.speed,
-            accuracy: Some(self.accuracy),
-            altitude_accuracy: self.altitude_accuracy,
-            ..row
-        }
-    }
 }
 
 /// Log `row` for the topic in `header`: persist the event together with the
@@ -106,11 +82,10 @@ async fn record_event(
     }
     header.set(updated);
     on_saved(&row);
-    if let Some(gps) = get_gps().await {
-        let enriched = gps.applied_to(row);
-        if enrich_event_idb(db, &enriched).await {
-            on_enriched(&enriched);
-        }
+    if let Some(gps) = get_gps().await
+        && let Some(enriched) = enrich_gps_idb(db, &row.id, &gps).await
+    {
+        on_enriched(&enriched);
     }
 }
 
@@ -125,6 +100,57 @@ pub(crate) struct Editing(pub(crate) RwSignal<bool>);
 pub(crate) struct ShowDetail(pub(crate) RwSignal<bool>);
 #[derive(Clone, Copy)]
 pub(crate) struct ShowEventDetail(pub(crate) RwSignal<bool>);
+/// Events of the topic open in the detail screen, shared with the event
+/// detail screen so edits there show up in the list. `all` holds every event
+/// (newest first, feeds the statistics); `page` is the visible prefix.
+#[derive(Clone, Copy)]
+pub(crate) struct DetailEvents {
+    pub(crate) page: RwSignal<Vec<EventRow>>,
+    pub(crate) all: RwSignal<Vec<EventRow>>,
+}
+
+impl DetailEvents {
+    /// Replace the stored copy of `row` (matched by id), keep `all` sorted
+    /// newest first and refresh the visible page.
+    pub(crate) fn replace(self, row: &EventRow) {
+        self.all.update(|v| {
+            if let Some(e) = v.iter_mut().find(|e| e.id == row.id) {
+                *e = row.clone();
+            }
+        });
+        self.resort(0);
+    }
+
+    /// Add a newly logged event at its place in time (a manual entry can be
+    /// in the past) and grow the visible page by one.
+    pub(crate) fn insert(self, row: &EventRow) {
+        self.all.update(|v| v.push(row.clone()));
+        self.resort(1);
+    }
+
+    pub(crate) fn remove(self, event_id: &str) {
+        self.all.update(|v| v.retain(|e| e.id != event_id));
+        self.page.update(|v| v.retain(|e| e.id != event_id));
+    }
+
+    /// Show a GPS-enriched row in the list and, if it is open, in the event
+    /// detail screen.
+    pub(crate) fn show_enriched(self, open: RwSignal<Option<EventRow>>, row: &EventRow) {
+        self.replace(row);
+        if open.with_untracked(|e| e.as_ref().is_some_and(|e| e.id == row.id)) {
+            open.set(Some(row.clone()));
+        }
+    }
+
+    fn resort(self, grow_page: usize) {
+        self.all
+            .update(|v| v.sort_by(|a, b| b.timestamp_ms.total_cmp(&a.timestamp_ms)));
+        let len = self.page.with_untracked(Vec::len) + grow_page;
+        self.page
+            .set(self.all.with_untracked(|v| v[..len.min(v.len())].to_vec()));
+    }
+}
+
 /// Id of the topic whose "−" was tapped and now shows a "Delete" confirm button.
 #[derive(Clone, Copy)]
 pub(crate) struct PendingDelete(pub(crate) RwSignal<Option<String>>);
@@ -246,6 +272,9 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
     let show_detail = use_context::<ShowDetail>().expect("show_detail context").0;
     let detail_id = use_context::<RwSignal<String>>().expect("detail_id context");
     let toasts = use_context::<Toasts>().expect("toasts context");
+    let detail_events = use_context::<DetailEvents>().expect("detail_events context");
+    let event_detail_ev =
+        use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
     let pending_delete = use_context::<PendingDelete>()
         .expect("pending_delete context")
         .0;
@@ -318,7 +347,7 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
                         });
                     });
                 },
-                |_| {},
+                |row| detail_events.show_enriched(event_detail_ev, row),
             )
             .await;
         });
@@ -516,16 +545,18 @@ pub fn TopicDetail() -> impl IntoView {
     let event_detail_ev =
         use_context::<RwSignal<Option<EventRow>>>().expect("event_detail_ev context");
     let toasts = use_context::<Toasts>().expect("toasts context");
+    let use_detail = use_context::<DetailEvents>().expect("detail_events context");
 
     let show_add_modal: RwSignal<bool> = RwSignal::new(false);
     let manual_dt: RwSignal<String> = RwSignal::new(String::new());
     let swiped_id: RwSignal<Option<String>> = RwSignal::new(None);
 
-    let events: RwSignal<Vec<EventRow>> = RwSignal::new(Vec::new());
+    let DetailEvents {
+        page: events,
+        all: all_evs,
+    } = use_context::<DetailEvents>().expect("detail_events context");
     let loading: RwSignal<bool> = RwSignal::new(false);
     let page_end: RwSignal<usize> = RwSignal::new(PAGE_SIZE);
-    // Every event of the viewed topic (newest first); `events` is the visible page.
-    let all_evs: RwSignal<Vec<EventRow>> = RwSignal::new(Vec::new());
 
     let go_back = move |_: leptos::ev::MouseEvent| {
         show_detail.set(false);
@@ -609,14 +640,12 @@ pub fn TopicDetail() -> impl IntoView {
                     row,
                     sig,
                     |row| {
-                        events.update(|evs| evs.insert(0, row.clone()));
-                        all_evs.update(|v| v.insert(0, row.clone()));
+                        use_detail.insert(row);
                         let event_id = row.id.clone();
                         let name = sig.with_untracked(|h| h.name.clone());
                         toasts.show_with_undo(format!("Logged in {name}"), move || {
                             let event_id = event_id.clone();
-                            events.update(|evs| evs.retain(|e| e.id != event_id));
-                            all_evs.update(|v| v.retain(|e| e.id != event_id));
+                            use_detail.remove(&event_id);
                             spawn_local(async move {
                                 if let Some(db) = get_db() {
                                     undo_logged_event(&db, &event_id, sig).await;
@@ -624,20 +653,7 @@ pub fn TopicDetail() -> impl IntoView {
                             });
                         });
                     },
-                    |row| {
-                        let replace = |v: &mut Vec<EventRow>| {
-                            if let Some(e) = v.iter_mut().find(|e| e.id == row.id) {
-                                *e = row.clone();
-                            }
-                        };
-                        events.update(replace);
-                        all_evs.update(replace);
-                        if event_detail_ev
-                            .with_untracked(|e| e.as_ref().map(|e| &e.id) == Some(&row.id))
-                        {
-                            event_detail_ev.set(Some(row.clone()));
-                        }
-                    },
+                    |row| use_detail.show_enriched(event_detail_ev, row),
                 )
                 .await;
             });
@@ -695,10 +711,12 @@ pub fn TopicDetail() -> impl IntoView {
                         </Show>
                         <For
                             each=move || events.get()
-                            key=|ev| ev.id.clone()
+                            // Timestamp and note are part of the key so an edited row re-renders.
+                            key=|ev| format!("{}|{}|{}", ev.id, ev.timestamp_ms, ev.note.as_deref().unwrap_or(""))
                             children=move |ev| {
                                 let eid        = StoredValue::new(ev.id.clone());
                                 let ts_str     = ev.timestamp.clone();
+                                let note       = ev.note.clone();
                                 let swipe_tx_x = StoredValue::new(0.0f64);
 
                                 let on_touch_start_row = move |te: web_sys::TouchEvent| {
@@ -765,7 +783,10 @@ pub fn TopicDetail() -> impl IntoView {
                                     >
                                         <button class="event-item-content" type="button" on:click=open_event_detail>
                                             <span class="event-icon" aria-hidden="true">"🕐"</span>
-                                            <span class="event-time">{format_timestamp(&ts_str)}</span>
+                                            <span class="event-text">
+                                                <span class="event-time">{format_timestamp(&ts_str)}</span>
+                                                {note.map(|n| view! { <span class="event-note">{n}</span> })}
+                                            </span>
                                         </button>
                                         <button
                                             class="btn-delete-swipe"
@@ -1054,6 +1075,82 @@ pub fn EventDetail() -> impl IntoView {
 
     let ev = move || event_detail_ev.get();
 
+    // ── Editable note and time ────────────────────────────────────────────
+    let detail = use_context::<DetailEvents>().expect("detail_events context");
+    let topic_list = use_context::<TopicList>().expect("topic_list context");
+    let toasts = use_context::<Toasts>().expect("toasts context");
+    let note_draft = RwSignal::new(String::new());
+    let time_draft = RwSignal::new(String::new());
+    // Reset the drafts only when a different event is opened, so a GPS fix
+    // arriving while typing does not wipe the draft.
+    let open_id = Memo::new(move |_| event_detail_ev.with(|e| e.as_ref().map(|e| e.id.clone())));
+    Effect::new(move |_| {
+        open_id.track();
+        if let Some(e) = event_detail_ev.get_untracked() {
+            note_draft.set(e.note.clone().unwrap_or_default());
+            time_draft.set(local_datetime_str(e.timestamp_ms));
+        }
+    });
+    let save_row = move |row: EventRow, done: &'static str, counts_changed: bool| {
+        let Some(db) = get_db() else { return };
+        spawn_local(async move {
+            if !update_event_idb(&db, &row).await {
+                toasts.show("Not saved – the event no longer exists");
+                return;
+            }
+            detail.replace(&row);
+            event_detail_ev.set(Some(row.clone()));
+            if counts_changed {
+                let sig = topic_list.with_untracked(|rows| {
+                    rows.iter()
+                        .find(|s| s.with_untracked(|h| h.id == row.topic_id))
+                        .copied()
+                });
+                if let Some(sig) = sig {
+                    let fresh = refresh_topic_counts_idb(&db, &sig.get_untracked()).await;
+                    sig.set(fresh);
+                }
+            }
+            toasts.show(done);
+        });
+    };
+    let save_note = move |_| {
+        let Some(current) = event_detail_ev.get_untracked() else {
+            return;
+        };
+        let draft = note_draft.get_untracked();
+        let note = Some(draft.trim().to_string()).filter(|n| !n.is_empty());
+        if note != current.note {
+            save_row(EventRow { note, ..current }, "Note saved", false);
+        }
+    };
+    // Compare instants, not strings: browsers drop ":00" seconds from the value.
+    let time_changed = move || {
+        let draft_ms = js_sys::Date::new(&JsValue::from_str(&time_draft.get())).get_time();
+        event_detail_ev.with(|e| {
+            e.as_ref().is_some_and(|e| {
+                draft_ms.is_nan()
+                    || (draft_ms - (e.timestamp_ms / 1000.0).floor() * 1000.0).abs() >= 1000.0
+            })
+        })
+    };
+    let save_time = move |_| {
+        let Some(current) = event_detail_ev.get_untracked() else {
+            return;
+        };
+        let d = js_sys::Date::new(&JsValue::from_str(&time_draft.get_untracked()));
+        if d.get_time().is_nan() {
+            toasts.show("Invalid date");
+            return;
+        }
+        let row = EventRow {
+            timestamp: d.to_iso_string().as_string().unwrap_or_default(),
+            timestamp_ms: d.get_time(),
+            ..current
+        };
+        save_row(row, "Time updated", true);
+    };
+
     view! {
         <div
             class="event-detail-wrapper"
@@ -1068,9 +1165,46 @@ pub fn EventDetail() -> impl IntoView {
                 </div>
             </header>
             <div class="event-detail-main">
+                // Rendered once per opened event (not on every update), so
+                // the fields keep focus while a save or GPS fix lands.
+                <Show when=move || open_id.with(Option::is_some)>
+                    <div class="event-detail-card event-edit-card">
+                        <div class="event-detail-section">
+                            <label class="event-detail-row event-edit-row">
+                                <span class="event-detail-label">"Time"</span>
+                                <input
+                                    class="event-time-input"
+                                    type="datetime-local"
+                                    step="1"
+                                    prop:value=time_draft
+                                    on:input=move |e| time_draft.set(event_target_value(&e))
+                                />
+                            </label>
+                            <Show when=time_changed>
+                                <div class="event-edit-actions">
+                                    <button class="event-save-btn" type="button" on:click=save_time>
+                                        "Save time"
+                                    </button>
+                                </div>
+                            </Show>
+                        </div>
+                        <div class="event-detail-section">
+                            <label class="event-note-field">
+                                <span class="event-detail-label">"Note"</span>
+                                <textarea
+                                    class="event-note-input"
+                                    rows="3"
+                                    placeholder="Add a note…"
+                                    prop:value=note_draft
+                                    on:input=move |e| note_draft.set(event_target_value(&e))
+                                    on:blur=save_note
+                                />
+                            </label>
+                        </div>
+                    </div>
+                </Show>
                 <Show when=move || ev().is_some()>
                     {move || ev().map(|e| {
-                        let ts = format_timestamp(&e.timestamp);
                         let lat_str  = e.lat.map(|v| format!("{:.6}°", v)).unwrap_or("—".into());
                         let lon_str  = e.lon.map(|v| format!("{:.6}°", v)).unwrap_or("—".into());
                         let alt_str  = fmt_opt(e.altitude, "m", 1);
@@ -1080,12 +1214,6 @@ pub fn EventDetail() -> impl IntoView {
                         let aac_str  = fmt_opt(e.altitude_accuracy, "m ±", 1);
                         view! {
                             <div class="event-detail-card">
-                                <div class="event-detail-section">
-                                    <div class="event-detail-row">
-                                        <span class="event-detail-label">"Time"</span>
-                                        <span class="event-detail-value">{ts}</span>
-                                    </div>
-                                </div>
                                 <div class="event-detail-section">
                                     <div class="event-detail-row">
                                         <span class="event-detail-label">"Latitude"</span>
@@ -1145,7 +1273,7 @@ fn parse_add_param_raw(search: &str) -> Option<&str> {
 
 /// Undo a just-logged event: delete it and recompute the topic's counts from
 /// what is left. Returns whether the event was deleted. A GPS fix that
-/// arrives afterwards is dropped by `enrich_event_idb`.
+/// arrives afterwards is dropped by `update_event_idb`.
 pub(crate) async fn undo_logged_event(
     db: &Rexie,
     event_id: &str,
@@ -1401,6 +1529,10 @@ pub fn App() -> impl IntoView {
         }
     });
     provide_context(event_detail_ev);
+    provide_context(DetailEvents {
+        page: RwSignal::new(Vec::new()),
+        all: RwSignal::new(Vec::new()),
+    });
 
     // ── Foreground detection: refresh counts when a new day has started ───────
     {

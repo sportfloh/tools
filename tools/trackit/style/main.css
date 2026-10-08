@@ -817,6 +817,67 @@ html, body {
   font-style: italic;
 }
 
+/* Editable time + note (event detail) */
+.event-edit-card { margin-bottom: 16px; }
+.event-edit-row { align-items: center; }
+.event-time-input {
+  font: inherit;
+  font-size: .9375rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  background: transparent;
+  border: none;
+  text-align: right;
+  min-width: 0;
+}
+.event-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 16px 10px;
+}
+.event-save-btn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: white;
+  font: inherit;
+  font-size: .875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.event-note-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+}
+.event-note-input {
+  font: inherit;
+  font-size: .9375rem;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+/* Note under the timestamp in the event list */
+.event-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.event-note {
+  font-size: .8125rem;
+  color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Make event list rows tappable */
 .event-item-content {
   cursor: pointer;

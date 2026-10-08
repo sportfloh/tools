@@ -13,7 +13,13 @@ pub(crate) fn now_timestamp() -> String {
 }
 
 pub(crate) fn now_local_datetime_str() -> String {
-    let d = js_sys::Date::new_0();
+    local_datetime_str(js_sys::Date::now())
+}
+
+/// `YYYY-MM-DDTHH:MM:SS` in local time, the value format of
+/// `<input type="datetime-local" step="1">`.
+pub(crate) fn local_datetime_str(ms: f64) -> String {
+    let d = js_sys::Date::new(&JsValue::from_f64(ms));
     format!(
         "{}-{:02}-{:02}T{:02}:{:02}:{:02}",
         d.get_full_year(),
@@ -803,6 +809,25 @@ mod tests {
     }
 
     #[test]
+    fn event_row_without_note_deserializes() {
+        // Records and backups written before the note field existed.
+        let json = r#"{"id":"e1","topic_id":"t1","timestamp":"2023-11-15T12:00:00.000Z","timestamp_ms":1700049600000}"#;
+        let e: EventRow = serde_json::from_str(json).expect("legacy row must load");
+        assert_eq!(e.note, None);
+    }
+
+    #[test]
+    fn event_row_note_round_trips() {
+        let e = EventRow {
+            id: "e1".into(),
+            note: Some("Bergauf, 12 km".into()),
+            ..Default::default()
+        };
+        let back: EventRow = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
+        assert_eq!(back.note.as_deref(), Some("Bergauf, 12 km"));
+    }
+
+    #[test]
     fn parse_bulk_import_rejects_unknown_version() {
         let json = r#"{"version":2,"topics":[{"id":"t1","name":"Running","events":[]}]}"#;
         assert!(parse_bulk_import(json).is_none());
@@ -835,8 +860,9 @@ mod tests {
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::{
-        day_starts, export_topic, format_timestamp, new_id, now_local_datetime_str, now_timestamp,
-        parse_import_line, short_day_label, time_boundaries, week_starts,
+        day_starts, export_topic, format_timestamp, local_datetime_str, new_id,
+        now_local_datetime_str, now_timestamp, parse_import_line, short_day_label, time_boundaries,
+        week_starts,
     };
     use crate::db::EventRow;
     use wasm_bindgen_test::*;
@@ -1002,5 +1028,12 @@ mod wasm_tests {
         // Month is 0-based: 9 = October. 5 Oct 2026 is a Monday.
         let ms = js_sys::Date::new_with_year_month_day(2026, 9, 5).get_time();
         assert_eq!(short_day_label(ms), "Mon 5 Oct");
+    }
+
+    #[wasm_bindgen_test]
+    fn local_datetime_str_round_trips_to_the_second() {
+        let ms = 1_700_046_000_123.0; // .123 s is dropped by the input format
+        let back = js_sys::Date::new(&local_datetime_str(ms).into()).get_time();
+        assert_eq!(back, 1_700_046_000_000.0);
     }
 }
