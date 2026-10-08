@@ -284,3 +284,18 @@ html, body {
   opacity: .38;
   cursor: not-allowed;
 }
+
+/* Collapsible settings (start time, signature) */
+.settings {
+  border-top: 1px solid var(--color-border);
+  padding-top: 10px;
+}
+.settings summary {
+  cursor: pointer;
+  font-size: .8125rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  user-select: none;
+}
+.settings[open] summary { margin-bottom: 10px; }
+.settings .form-field + .form-field { margin-top: 10px; }

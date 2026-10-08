@@ -8,6 +8,8 @@ use crate::{storage, templates};
 // defaults to the next Saturday, so a stale date cannot come back).
 const KEY_TOPIC: &str = "tea.topic";
 const KEY_DESCR: &str = "tea.descr";
+const KEY_TIME: &str = "tea.time";
+const KEY_SIGNATURE: &str = "tea.signature";
 
 /// Returns the date of the next Saturday (from today) as `DD.MM.YYYY`.
 /// If today is Saturday, returns next week's Saturday.
@@ -32,6 +34,22 @@ fn next_saturday_str() -> String {
 pub fn App() -> impl IntoView {
     // Date is stored and displayed directly as DD.MM.YYYY — no conversion layer.
     let date = RwSignal::new(next_saturday_str());
+    // Settings as typed (persisted); an emptied field falls back to the default.
+    let time_input = RwSignal::new(storage::load(KEY_TIME).unwrap_or_default());
+    let signature_input = RwSignal::new(storage::load(KEY_SIGNATURE).unwrap_or_default());
+    Effect::new(move |_| storage::save(KEY_TIME, &time_input.get()));
+    Effect::new(move |_| storage::save(KEY_SIGNATURE, &signature_input.get()));
+    let settings = Memo::new(move |_| {
+        let defaults = templates::Settings::default();
+        let or_default = |v: String, d: String| {
+            let v = v.trim();
+            if v.is_empty() { d } else { v.to_string() }
+        };
+        templates::Settings {
+            time: or_default(time_input.get(), defaults.time),
+            signature: or_default(signature_input.get(), defaults.signature),
+        }
+    });
     let topic = RwSignal::new(storage::load(KEY_TOPIC).unwrap_or_default());
     let descr = RwSignal::new(storage::load(KEY_DESCR).unwrap_or_default());
     Effect::new(move |_| storage::save(KEY_TOPIC, &topic.get()));
@@ -45,24 +63,24 @@ pub fn App() -> impl IntoView {
         let d = date.get();
         let t = topic.get();
         let de = descr.get();
-        templates::chat(d.trim(), t.trim(), de.trim())
+        templates::chat(d.trim(), t.trim(), de.trim(), &settings.get())
     });
     let email_subj = Memo::new(move |_| {
         let d = date.get();
         let t = topic.get();
-        templates::email_subject(d.trim(), t.trim())
+        templates::email_subject(d.trim(), t.trim(), &settings.get())
     });
     let email_body = Memo::new(move |_| {
         let d = date.get();
         let t = topic.get();
         let de = descr.get();
-        templates::email_body(d.trim(), t.trim(), de.trim())
+        templates::email_body(d.trim(), t.trim(), de.trim(), &settings.get())
     });
     let mastodon_text = Memo::new(move |_| {
         let d = date.get();
         let t = topic.get();
         let de = descr.get();
-        templates::mastodon(d.trim(), t.trim(), de.trim())
+        templates::mastodon(d.trim(), t.trim(), de.trim(), &settings.get())
     });
 
     let inputs_complete = Memo::new(move |_| {
@@ -117,6 +135,31 @@ pub fn App() -> impl IntoView {
                             on:input=move |ev| descr.set(event_target_value(&ev))
                         />
                     </div>
+                    <details class="settings">
+                        <summary>"Einstellungen"</summary>
+                        <div class="form-field">
+                            <label class="form-label" for="inp-time">"Uhrzeit"</label>
+                            <input
+                                id="inp-time"
+                                type="text"
+                                class="form-input"
+                                placeholder=templates::Settings::default().time
+                                prop:value=time_input
+                                on:input=move |ev| time_input.set(event_target_value(&ev))
+                            />
+                        </div>
+                        <div class="form-field">
+                            <label class="form-label" for="inp-signature">"Signatur (E-Mail)"</label>
+                            <input
+                                id="inp-signature"
+                                type="text"
+                                class="form-input"
+                                placeholder=templates::Settings::default().signature
+                                prop:value=signature_input
+                                on:input=move |ev| signature_input.set(event_target_value(&ev))
+                            />
+                        </div>
+                    </details>
                     <div class="form-actions">
                         <button
                             class="btn-clear"

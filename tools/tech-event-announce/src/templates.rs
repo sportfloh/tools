@@ -1,32 +1,54 @@
-pub fn chat(date: &str, topic: &str, description: &str) -> String {
+/// User-adjustable parts of the announcement texts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Settings {
+    /// Start time as written in the text, e.g. "14 Uhr".
+    pub time: String,
+    /// Name under the e-mail.
+    pub signature: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            time: "14 Uhr".into(),
+            signature: "sportfloh".into(),
+        }
+    }
+}
+
+pub fn chat(date: &str, topic: &str, description: &str, s: &Settings) -> String {
     format!(
         "Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
          {description}\n\n\
-         Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
-         Diese Info dürft Ihr gerne weiterleiten."
+         Wir starten wie immer um {time}; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
+         Diese Info dürft Ihr gerne weiterleiten.",
+        time = s.time
     )
 }
 
-pub fn email_subject(date: &str, topic: &str) -> String {
-    format!("Tech-Event - {topic} - Samstag {date} - 14 Uhr")
+pub fn email_subject(date: &str, topic: &str, s: &Settings) -> String {
+    format!("Tech-Event - {topic} - Samstag {date} - {}", s.time)
 }
 
-pub fn email_body(date: &str, topic: &str, description: &str) -> String {
+pub fn email_body(date: &str, topic: &str, description: &str, s: &Settings) -> String {
     format!(
         "Hallo Zusammen,\n\n\
          Kommenden Samstag ({date}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
          {description}\n\n\
-         Wir starten wie immer um 14 Uhr; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
+         Wir starten wie immer um {time}; Eintritt ist wie immer kostenlos und ohne Anmeldung möglich.\n\
          Diese Info dürft Ihr gerne weiterleiten.\n\n\
          Gruß,\n\
-         sportfloh"
+         {signature}",
+        time = s.time,
+        signature = s.signature
     )
 }
 
-pub fn mastodon(date: &str, topic: &str, description: &str) -> String {
+pub fn mastodon(date: &str, topic: &str, description: &str, s: &Settings) -> String {
     format!(
-        "Kommenden Samstag ({date} ab 14 Uhr) ist wieder Tech-Event, zum Thema: {topic}\n\n\
-         {description}"
+        "Kommenden Samstag ({date} ab {time}) ist wieder Tech-Event, zum Thema: {topic}\n\n\
+         {description}",
+        time = s.time
     )
 }
 
@@ -128,6 +150,37 @@ pub fn date_warning(s: &str) -> Option<String> {
 mod tests {
     use super::*;
 
+    // --- settings ---
+
+    fn custom() -> Settings {
+        Settings {
+            time: "15:30 Uhr".into(),
+            signature: "Das Orga-Team".into(),
+        }
+    }
+
+    #[test]
+    fn subject_uses_custom_time() {
+        assert_eq!(
+            email_subject("08.11.2025", "Rust", &custom()),
+            "Tech-Event - Rust - Samstag 08.11.2025 - 15:30 Uhr"
+        );
+    }
+
+    #[test]
+    fn email_body_uses_custom_signature_and_time() {
+        let r = email_body("08.11.2025", "Rust", "Text.", &custom());
+        assert!(r.ends_with("Gruß,\nDas Orga-Team"), "got: {r}");
+        assert!(r.contains("um 15:30 Uhr;"));
+        assert!(!r.contains("14 Uhr") && !r.contains("sportfloh"));
+    }
+
+    #[test]
+    fn chat_and_mastodon_use_custom_time() {
+        assert!(chat("08.11.2025", "Rust", "Text.", &custom()).contains("um 15:30 Uhr;"));
+        assert!(mastodon("08.11.2025", "Rust", "Text.", &custom()).contains("ab 15:30 Uhr)"));
+    }
+
     // --- date validation ---
 
     #[test]
@@ -181,7 +234,12 @@ mod tests {
 
     #[test]
     fn chat_renders_full_template() {
-        let r = chat("08.11.2025", "Rust im Alltag", "Ein Vortrag über Rust.");
+        let r = chat(
+            "08.11.2025",
+            "Rust im Alltag",
+            "Ein Vortrag über Rust.",
+            &Settings::default(),
+        );
         assert!(r.contains("Samstag (08.11.2025)"), "missing date in parens");
         assert!(r.contains("zum Thema: Rust im Alltag"), "missing topic");
         assert!(
@@ -195,7 +253,7 @@ mod tests {
 
     #[test]
     fn chat_with_empty_inputs_preserves_structure() {
-        let r = chat("", "", "");
+        let r = chat("", "", "", &Settings::default());
         assert!(
             r.contains("Samstag ()"),
             "date slot should be empty inside parens"
@@ -209,21 +267,29 @@ mod tests {
     #[test]
     fn email_subject_renders_correctly() {
         assert_eq!(
-            email_subject("08.11.2025", "Rust im Alltag"),
+            email_subject("08.11.2025", "Rust im Alltag", &Settings::default()),
             "Tech-Event - Rust im Alltag - Samstag 08.11.2025 - 14 Uhr"
         );
     }
 
     #[test]
     fn email_subject_empty_inputs() {
-        assert_eq!(email_subject("", ""), "Tech-Event -  - Samstag  - 14 Uhr");
+        assert_eq!(
+            email_subject("", "", &Settings::default()),
+            "Tech-Event -  - Samstag  - 14 Uhr"
+        );
     }
 
     // --- email_body ---
 
     #[test]
     fn email_body_renders_full_template() {
-        let r = email_body("08.11.2025", "Rust im Alltag", "Ein Vortrag über Rust.");
+        let r = email_body(
+            "08.11.2025",
+            "Rust im Alltag",
+            "Ein Vortrag über Rust.",
+            &Settings::default(),
+        );
         assert!(r.starts_with("Hallo Zusammen,"), "must start with greeting");
         assert!(r.contains("Samstag (08.11.2025)"));
         assert!(r.contains("zum Thema: Rust im Alltag"));
@@ -240,7 +306,12 @@ mod tests {
 
     #[test]
     fn mastodon_renders_correctly() {
-        let r = mastodon("08.11.2025", "Rust im Alltag", "Ein Vortrag.");
+        let r = mastodon(
+            "08.11.2025",
+            "Rust im Alltag",
+            "Ein Vortrag.",
+            &Settings::default(),
+        );
         assert!(r.contains("08.11.2025 ab 14 Uhr"), "missing date+time");
         assert!(r.contains("zum Thema: Rust im Alltag"));
         assert!(r.contains("Ein Vortrag."));
