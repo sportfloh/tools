@@ -21,15 +21,7 @@
   <link data-trunk rel="copy-file" href="../_shared/service-worker.js"/>
   <link data-trunk rel="copy-file" href="public/icon.svg"/>
 
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function() {
-        navigator.serviceWorker.register('./service-worker.js').catch(function(err) {
-          console.log('ServiceWorker registration failed:', err);
-        });
-      });
-    }
-  </script>
+  <link data-trunk rel="inline" href="../_shared/register-sw.js"/>
 </head>
 <body></body>
 </html>
