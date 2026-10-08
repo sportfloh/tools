@@ -19,6 +19,9 @@ cargo clippy --target wasm32-unknown-unknown -- -D warnings
 
 # Run native unit tests (workspace root)
 cargo test --lib
+
+# CSP hook + landing-page hash tests (workspace root)
+python3 -m unittest discover -s tools/_shared
 ```
 
 The pre-commit hook (`.githooks/pre-commit`) runs `cargo fmt` then `cargo clippy`. Activate it once per clone:
@@ -53,11 +56,13 @@ cd tools/trackit && wasm-pack test --headless --chrome
 cd tools/tech-event-announce && wasm-pack test --headless --chrome   # storage.rs only
 ```
 
-Both CI workflows (`ci-trackit.yml`, `ci-tech-event-announce.yml`) run fmt, clippy, the
-native tests and the tool's WASM tests. `deploy.yml` runs `cargo test --lib` before building,
+`ci.yml` runs on PRs: a `lint` job (CSP Python tests, `cargo fmt --check`, clippy, once for the
+workspace) and a `test` job per tool (matrix: native tests via `cargo test --lib -p <tool>`, then
+`wasm-pack test`). Branch protection needs the check names `lint`, `test (trackit)` and
+`test (tech-event-announce)`. `deploy.yml` runs `cargo test --lib` before building,
 so a PR merged before its CI finished still cannot deploy failing code.
 
-### Current coverage (70 native + 39 WASM tests)
+### Current coverage (71 native + 43 WASM + 6 Python tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -97,10 +102,10 @@ so a PR merged before its CI finished still cannot deploy failing code.
 | `parse_bulk_import_valid` | native | `time.rs` | valid JSON deserialises to `BulkExport` with correct fields |
 | `parse_bulk_import_invalid_returns_none` | native | `time.rs` | malformed JSON and missing fields return `None` |
 | `parse_bulk_import_rejects_unknown_version` | native | `time.rs` | a backup with `version != 1` is rejected |
-| `count_noun_singular_and_plural` | native | `app.rs` | "1 topic" / "3 topics" |
-| `import_message_with_duplicates` | native | `app.rs` | toast text incl. "(15 duplicates skipped)" |
-| `import_message_singular` | native | `app.rs` | singular nouns in the toast text |
-| `import_message_without_duplicates` | native | `app.rs` | no parenthetical when nothing was skipped |
+| `count_noun_singular_and_plural` | native | `import.rs` | "1 topic" / "3 topics" |
+| `import_message_with_duplicates` | native | `import.rs` | toast text incl. "(15 duplicates skipped)" |
+| `import_message_singular` | native | `import.rs` | singular nouns in the toast text |
+| `import_message_without_duplicates` | native | `import.rs` | no parenthetical when nothing was skipped |
 | `parse_add_param_raw_present` | native | `app.rs` | `?add=` param is extracted correctly, including encoded values |
 | `parse_add_param_raw_absent` | native | `app.rs` | missing / non-matching params return `None` |
 | `chat_renders_full_template` | native | `templates.rs` (TEA) | all placeholders appear in the Chat output |
@@ -131,6 +136,7 @@ so a PR merged before its CI finished still cannot deploy failing code.
 | `mailto_url_encodes_reserved_chars_and_spaces` | native | `templates.rs` (TEA) | `&`, `?`, spaces → `%26`, `%3F`, `%20` |
 | `mailto_url_encodes_umlauts_and_newlines` | native | `templates.rs` (TEA) | UTF-8 percent-encoding, `\n` → `%0D%0A` |
 | `mailto_url_round_trips_full_email` | native | `templates.rs` (TEA) | a real subject/body yields a URL without raw spaces/newlines |
+| `days_until_next_saturday_every_weekday` | native | `templates.rs` (TEA) | 1–7 days ahead for every weekday; Saturday → next week |
 | `parse_valid_import_line` | WASM | `time.rs` | valid timestamp line parses to an `EventRow` |
 | `parse_empty_import_line_returns_none` | WASM | `time.rs` | empty / blank lines return `None` |
 | `parse_malformed_import_line_returns_none` | WASM | `time.rs` | bad input returns `None` |
@@ -163,13 +169,23 @@ so a PR merged before its CI finished still cannot deploy failing code.
 | `idb_enrich_gps_skips_deleted_event` | WASM | `db.rs` | a GPS fix for a deleted event writes nothing, returns `None` |
 | `idb_open_failure_returns_err` | WASM | `db.rs` | a rejected IDB open (version downgrade) returns `Err` instead of panicking |
 | `topic_signal_outlives_disposed_handler_scope` | WASM | `app.rs` | `new_topic_signal` survives disposal of the scope it was created in |
-| `undo_logged_event_restores_counts` | WASM | `app.rs` | Undo deletes the logged event and brings counts back to 0 |
+| `undo_logged_event_restores_counts` | WASM | `logging.rs` | Undo deletes the logged event and brings counts back to 0 |
 | `idb_add_events_bulk_writes_all` | WASM | `db.rs` | 50 rows written in one transaction are all stored |
 | `idb_add_events_bulk_empty_is_ok` | WASM | `db.rs` | bulk insert of nothing commits |
 | `idb_save_topic_headers_persists_positions` | WASM | `db.rs` | batch-saved positions come back sorted from `load_topic_headers` |
+| `idb_count_topic_events_matches_event_row_counts` | WASM | `db.rs` | index counts (`count_topic_events_idb`) equal `event_row_counts` for today / 3 d / 10 d / last month / future events |
+| `idb_upgrade_v1_to_v2_keeps_data_and_indexes_it` | WASM | `db.rs` | a v1 DB opened with the v2 schema keeps its events and counts them via `by_topic_time` |
+| `idb_delete_topic_with_many_events` | WASM | `db.rs` | deleting a topic with 2 000 events removes them all, other topics untouched |
+| `next_saturday_is_a_saturday_in_the_future` | WASM | `app.rs` (TEA) | the default date parses, is a Saturday and lies in the future |
 | `storage_round_trip` | WASM | `storage.rs` (TEA) | `localStorage` save + load, incl. newlines |
 | `storage_missing_key_is_none` | WASM | `storage.rs` (TEA) | unknown key → `None` |
 | `refresh_all_counts_corrects_stale_signal` | WASM | `app.rs` | `refresh_all_topic_counts` updates stale Leptos signals to match recomputed IDB counts |
+| `test_inline_bodies_skip_external_scripts` | Python | `test_csp.py` | only `<script>` elements without `src` are hashed |
+| `test_hash_source_matches_known_value` | Python | `test_csp.py` | sha256 source matches the CSP spec's example |
+| `test_secure_page_puts_policy_first_in_head` | Python | `test_csp.py` | meta is the first `<head>` child, lists both hashes, no `unsafe-inline`, rest untouched |
+| `test_secure_page_rejects_unexpected_inline_scripts` | Python | `test_csp.py` | a third inline script fails the build |
+| `test_inject_refuses_a_second_policy` | Python | `test_csp.py` | running the hook twice is an error |
+| `test_landing_page_meta_matches_its_style` | Python | `test_csp.py` | `tools/index.html`'s CSP hash matches its `<style>` block |
 
 ## TDD Workflow
 
@@ -197,6 +213,7 @@ Every new feature **must** follow the red → green → refactor cycle:
 |---|---|
 | Pure Rust (no JS APIs, no `web-sys`) | `#[test]` in the relevant module (`time.rs`, etc.) — runs with `cargo test --lib` |
 | JS APIs / `web-sys` / IndexedDB | `#[wasm_bindgen_test]` in the relevant module — runs with `wasm-pack test` |
+| Build scripts (`tools/_shared/*.py`) | `unittest` in `tools/_shared/test_*.py` |
 
 Prefer native tests wherever possible; they are faster and need no browser.
 
@@ -212,10 +229,12 @@ rust-toolchain.toml      ← stable + wasm32-unknown-unknown
 .claude/
 ├── settings.json        ← hooks (SessionStart tool install, PostToolUse auto-PR) + sem MCP
 ├── hooks/session-start.sh ← provisions web sessions (toolchain, trunk, wasm-pack, search tools, sem/weave)
-└── auto-pr.sh
+└── auto-pr.sh           ← PostToolUse: opens a PR after `git push` (needs an authenticated gh; no-op otherwise)
 tools/
 ├── _shared/             ← used by every tool's index.html via Trunk (not a crate)
 │   ├── base.css         ← reset, colour tokens (light/dark), header, scrollbar
+│   ├── csp.py           ← Trunk post_build hook: CSP meta with inline-script hashes
+│   ├── test_csp.py      ← its unit tests + landing-page hash check
 │   ├── register-sw.js   ← SW registration snippet (rel="inline")
 │   └── service-worker.js← the one service worker (copy-file into each dist/)
 ├── index.html           ← static landing page, served at /tools/ (copied by deploy.yml)
@@ -239,7 +258,14 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | File | Purpose |
 |------|---------|
 | `tools/trackit/src/main.rs` | Entry point — mounts the Leptos app |
-| `tools/trackit/src/app.rs` | All UI components and signal wiring |
+| `tools/trackit/src/app.rs` | `App` root: context types, startup, `?add=` deep links, foreground recount (`refresh_all_topic_counts`), `new_topic_signal` |
+| `tools/trackit/src/topic_card.rs` | `TopicCard`: one list row (log, rename, ▲/▼, delete) |
+| `tools/trackit/src/topic_detail.rs` | `TopicDetail`: event list, export/import, manual add |
+| `tools/trackit/src/event_detail.rs` | `EventDetail`: time, note and location of one event |
+| `tools/trackit/src/stats.rs` | `StatsCard`: per-day/week column chart, average interval |
+| `tools/trackit/src/toasts.rs` | `Toast`, `Toasts`, `ToastBar` |
+| `tools/trackit/src/logging.rs` | `get_gps`, `record_event`, `undo_logged_event` |
+| `tools/trackit/src/import.rs` | `import_into_topic`, `ImportOutcome`, toast text, `other_topic_names`, `next_position` |
 | `tools/trackit/src/db.rs` | IndexedDB access via `rexie` |
 | `tools/trackit/src/time.rs` | Timestamp helpers, count computation, import/export |
 | `tools/trackit/src/lib.rs` | Re-exports for the `trackitlib` rlib crate |
@@ -250,6 +276,7 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | `tools/_shared/service-worker.js` | The one service worker, copied into each tool's dist; cache prefix derived from its scope |
 | `tools/_shared/base.css` | Shared reset, colour tokens (light/dark), header bar, scrollbar; loaded before each tool's `style/main.css` |
 | `tools/_shared/register-sw.js` | SW registration snippet, inlined into each `index.html` by Trunk |
+| `tools/_shared/csp.py` | Trunk `post_build` hook (release only): Content-Security-Policy meta with the page's inline-script hashes; `--landing` prints the landing page's meta |
 
 ## Key dependencies
 
@@ -260,6 +287,7 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | `serde` / `serde_json` | 1.0.229 / 1.0.151 | Serialisation |
 | `wasm-bindgen` / `js-sys` / `web-sys` | 0.2.129 / 0.3.106 / 0.3.106 | WASM ↔ JS bridge |
 | `wasm-bindgen-futures` | 0.4 | Await JS Promises from async Rust (used for Geolocation) |
+| `futures` | 0.3 | `join_all` to issue many IDB requests in one transaction without awaiting each (trackit) |
 | `unicode-segmentation` | 1 | Grapheme counting (tech-event-announce) |
 
 Upgrade everything with `cargo upgrade` (cargo-edit; skips pre-releases) followed by
@@ -269,16 +297,19 @@ also bumped weekly by Dependabot (`.github/dependabot.yml`).
 Tooling versions (installed by the SessionStart hook in web sessions): trunk 0.21.14,
 wasm-pack 0.15.0, ast-grep 0.45, fd 9, ripgrep 14, sem 0.25, weave 0.5.
 
-trunk and wasm-pack are **pinned** in three places that must stay in sync: `TRUNK_VERSION` /
-`WASM_PACK_VERSION` in `.github/workflows/{deploy,ci-trackit,ci-tech-event-announce}.yml`
-(downloaded as release tarballs) and the same variables in `.claude/hooks/session-start.sh`.
+trunk and wasm-pack are **pinned** in three places that must stay in sync: `TRUNK_VERSION` in
+`.github/workflows/deploy.yml`, `WASM_PACK_VERSION` in `.github/workflows/ci.yml` (both downloaded
+as release tarballs) and the same variables in `.claude/hooks/session-start.sh`.
+
+Dependabot groups minor/patch updates into one weekly PR per ecosystem (cargo, actions); majors
+come as separate PRs.
 
 Rust edition: **2024**.
 
 ## Architecture
 
 Each tool is a single-page PWA built with **Leptos** (CSR/WASM) and **Trunk**, a separate crate
-under `tools/<name>/` (entry point `src/main.rs`, UI in `src/app.rs`). **trackit** keeps its data
+under `tools/<name>/` (entry point `src/main.rs`, root component in `src/app.rs`). **trackit** keeps its data
 in IndexedDB (`db.rs`) with logic in `time.rs`; **tech-event-announce** is stateless apart from a
 `localStorage` draft (`storage.rs`) and pure text templates (`templates.rs`). They share only
 the shell in `tools/_shared/` (service worker, base CSS, SW registration). The sections below
@@ -294,13 +325,20 @@ thread_local! { static DB: RefCell<Option<Rexie>> }
 
 Two IDB stores:
 - `topics` — keyed by `id`, holds `TopicHeader` (name + pre-computed counts)
-- `events` — keyed by `id`, indexed by `topic_id` via `by_topic`, holds `EventRow`
+- `events` — keyed by `id`, holds `EventRow`; indexes `by_topic` (`topic_id`) and
+  `by_topic_time` (compound `[topic_id, timestamp_ms]`)
+
+Schema version is `DB_VERSION` (2; `by_topic_time` was added in 2). Rexie's builder creates newly
+declared indexes on an existing store during the upgrade, so existing data is indexed
+automatically.
 
 `TopicHeader.position` (`#[serde(default)]`, so older records load as 0) orders the topic list; `load_topic_headers` returns topics sorted by `(position, name)` and `save_topic_headers_idb` rewrites positions in one transaction after a ▲/▼ move. New topics get `max + 1`. Ids come from `crypto.randomUUID()` (fallback: timestamp + random outside secure contexts).
 
-Counts (today / week / month / total) are stored **denormalized** in `TopicHeader` and recomputed from `EventRow` timestamps whenever events are added, deleted, or imported. `time_boundaries()` returns a `Bounds` struct, `event_row_counts()` a `Counts` struct; a single new event is applied with `with_added_event()`.
+Counts (today / week / month / total) are stored **denormalized** in `TopicHeader` and recomputed whenever events are added, deleted, or imported. `time_boundaries()` returns a `Bounds` struct, `event_row_counts()` a `Counts` struct; a single new event is applied with `with_added_event()`. Recounting does not load events: `count_topic_events_idb` runs `index.count` key ranges on `by_topic_time` (and `by_topic` for the total) for any number of topics in one readonly transaction, with the same half-open bounds as `Counts::of_event`; `refresh_topic_counts_idb` (one topic) uses it too and only writes the header if the counts changed.
 
-Logging an event (`record_event` in `app.rs`) writes the event and the bumped header in one transaction, then attaches a GPS fix in the background via `enrich_gps_idb`: it reads the *stored* row and sets only the GPS fields (so a note typed meanwhile is kept), and writes nothing if the event was deleted while waiting.
+Deleting a topic (`delete_topic_idb`) fetches only the primary keys of its events (`get_all_keys` on `by_topic`) and issues all deletes plus the header delete in one transaction (`join_all`). Imports serialise all rows first and `join_all` the puts; they stay bound by IndexedDB's own write speed (~18 s for 40 000 events in headless Chromium).
+
+Logging an event (`record_event` in `logging.rs`) writes the event and the bumped header in one transaction, then attaches a GPS fix in the background via `enrich_gps_idb`: it reads the *stored* row and sets only the GPS fields (so a note typed meanwhile is kept), and writes nothing if the event was deleted while waiting.
 
 `EventRow.note` (`#[serde(default)]`) is an optional free-text note. Note and time edits in the event detail screen go through `update_event_idb` (writes only if the event still exists); a time edit then recomputes the topic's counts with `refresh_topic_counts_idb`.
 
@@ -324,7 +362,7 @@ Leptos signals are the only state:
 
 IDB calls always happen inside `spawn_local` (async on the WASM event loop).
 
-A `visibilitychange` listener is registered on `document` inside `App()`. When the page returns to the foreground (`!document.hidden`) and the `today_start` boundary has changed (i.e. midnight passed while the app was backgrounded), `refresh_all_topic_counts` is called to recompute and update every topic's counts from IDB. The `Closure` is intentionally leaked (`.forget()`) because the `App` component lives for the entire page lifetime.
+Startup shows the stored headers as soon as they are loaded, then calls `refresh_all_topic_counts` (index counts for all topics in one transaction; only changed signals are updated and only changed headers saved, in one transaction). A `visibilitychange` listener registered on `document` inside `App()` runs the same recount every time the page returns to the foreground (`!document.hidden`), so the rolling 7-day count is never stale. The `Closure` is intentionally leaked (`.forget()`) because the `App` component lives for the entire page lifetime.
 
 ### Import / export format
 
@@ -332,7 +370,7 @@ A `visibilitychange` listener is registered on `document` inside `App()`. When t
 
 **Bulk (JSON):** a single `trackit-YYYY-MM-DD.json` file containing all topics and all their events. Structure: `{ version: 1, topics: [{ id, name, events: [...EventRow] }] }`, topics in display order. Counts are excluded (recomputed on import). Accessible via the `⬇` (export) and `⬆` (import) buttons in the main header. A file with any other `version` is rejected.
 
-Both imports go through `import_into_topic` (`app.rs`): match the topic by name (or create it at the end of the list), dedup by `timestamp` via `merge_new_events` (also within the file), give new rows fresh ids, write them in **one** transaction (`add_events_bulk_idb`), then recompute counts. A toast reports the result ("Imported 120 events into Running (15 duplicates skipped)", or "Not a trackit backup").
+Both imports go through `import_into_topic` (`import.rs`): match the topic by name (or create it at the end of the list), dedup by `timestamp` via `merge_new_events` (also within the file), give new rows fresh ids, write them in **one** transaction (`add_events_bulk_idb`), then recompute counts. A toast reports the result ("Imported 120 events into Running (15 duplicates skipped)", or "Not a trackit backup").
 
 ### URL actions (Apple Shortcuts / deep links)
 
@@ -369,6 +407,27 @@ Service worker (`tools/_shared/service-worker.js`), cache `<tool>-v4`:
 
 Bump the `v4` in `CACHE_NAME` only when the caching scheme itself changes; new builds are
 handled by the hash-based pruning.
+
+### Content-Security-Policy
+
+GitHub Pages cannot send headers, so the policy is a `<meta http-equiv>` (first child of
+`<head>`). Release builds get it from the Trunk `post_build` hook `tools/_shared/csp.py`
+(`[[hooks]]` in each `Trunk.toml`; debug builds / `trunk serve` are skipped because of the
+live-reload script):
+
+```
+default-src 'self'; script-src 'self' 'sha256-<bootstrap>' 'sha256-<register-sw>' 'wasm-unsafe-eval';
+style-src 'self'; img-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self';
+object-src 'none'; base-uri 'self'; form-action 'self'
+```
+
+The two inline scripts are Trunk's module bootstrap (its text contains the hashed file names,
+so its hash changes every build) and the inlined `register-sw.js`; the hook fails the build if it
+finds any other number. No inline `style="…"` attributes or `<style>` blocks are allowed in the
+tools: put styles in CSS files. The landing page `tools/index.html` carries a hand-written
+policy with the hash of its `<style>` block; after editing that block, replace the meta with the
+output of `python3 tools/_shared/csp.py --landing tools/index.html` (a CI test enforces it).
+`frame-ancestors` cannot be set from a meta tag.
 
 ## Git workflow
 
@@ -458,6 +517,17 @@ Rules:
 - **Screenshot comparisons need a frozen clock and blocked service workers** (Playwright
   `serviceWorkers: 'block'`, a fixed `Date`), and a short wait after filling forms: buttons
   have 150 ms colour transitions.
+- **Bumping the IndexedDB version** (`DB_VERSION`) is one-way: a browser that has opened the new
+  version can no longer open the page with an older build (open fails → "Storage unavailable"),
+  so never roll back a deploy that bumped it. New indexes on existing stores are created by
+  rexie's builder automatically; data migrations would need custom upgrade code.
+- **CSP blocks inline styles and scripts.** Leptos `style="…"` attributes, `<style>` blocks or
+  injected inline scripts fail silently in release builds (a `securitypolicyviolation` event).
+  Playwright's `page.evaluate` is *not* subject to CSP (it runs via DevTools), so test CSP from
+  a real page script. Rewriting a built `index.html` (e.g. faking a new build) changes the
+  bootstrap script's hash: re-run `csp.py` afterwards.
+- **Full disk in web sessions**: failed `cargo install` source builds (sem/weave) leave ~1 GB
+  `/tmp/cargo-install*` directories behind; delete them when space runs out.
 - **`weave setup`** rewrites `.gitattributes` with its full pattern list; only run it when
   deliberately upgrading weave. The hook only sets the driver in `.git/config`.
 
