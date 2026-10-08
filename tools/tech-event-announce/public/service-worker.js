@@ -1,3 +1,6 @@
+// Cache Storage is shared by every tool on this origin, so only ever touch
+// caches carrying this tool's own prefix.
+const CACHE_PREFIX = 'tech-event-announce-';
 const CACHE_NAME = 'tech-event-announce-v1';
 
 self.addEventListener('install', function(event) {
@@ -15,7 +18,9 @@ self.addEventListener('activate', function(event) {
     caches.keys().then(function(cacheNames) {
       return Promise.all(
         cacheNames
-          .filter(function(name) { return name !== CACHE_NAME; })
+          .filter(function(name) {
+            return name !== CACHE_NAME && name.startsWith(CACHE_PREFIX);
+          })
           .map(function(name) { return caches.delete(name); })
       );
     }).then(function() { return self.clients.claim(); })
