@@ -56,7 +56,7 @@ cd tools/tech-event-announce && wasm-pack test --headless --chrome   # storage.r
 CI (`ci-tech-event-announce.yml`) runs only the native tests for tech-event-announce;
 run its two WASM tests locally when touching `storage.rs`.
 
-### Current coverage (61 native + 32 WASM tests)
+### Current coverage (70 native + 39 WASM tests)
 
 | Test | Kind | Where | What it checks |
 |------|------|-------|----------------|
@@ -81,6 +81,15 @@ run its two WASM tests locally when touching `storage.rs`.
 | `move_item_up_and_down` | native | `time.rs` | ▲/▼ swap with the neighbour |
 | `move_item_at_the_ends_is_a_no_op` | native | `time.rs` | first ▲ / last ▼ / out-of-range index change nothing |
 | `sort_topics_by_position_then_name` | native | `time.rs` | topic order: `position`, then name (legacy records are all 0) |
+| `bucket_counts_assigns_by_half_open_ranges` | native | `time.rs` | chart buckets are `[start, next_start)`; last bucket ends at `end` |
+| `bucket_counts_ignores_out_of_range` | native | `time.rs` | events before the first bucket or at/after `end` are not counted |
+| `average_interval_needs_two_events` | native | `time.rs` | 0 or 1 events → `None` |
+| `average_interval_is_span_over_gaps` | native | `time.rs` | `(max − min) / (n − 1)`, independent of input order |
+| `format_interval_picks_a_readable_unit` | native | `time.rs` | "every 12 min" / "5 h" / "2.3 days" / "day" / "3 weeks" / "minute" |
+| `map_url_formats_coordinates` | native | `time.rs` | OpenStreetMap URL with 6-decimal lat/lon |
+| `map_url_negative_coordinates_and_rounding` | native | `time.rs` | negative coordinates; rounding to 6 decimals |
+| `event_row_without_note_deserializes` | native | `time.rs` | legacy rows/backups without `note` still load (`note: None`) |
+| `event_row_note_round_trips` | native | `time.rs` | `note` survives JSON serialisation |
 | `topic_header_serde_round_trip` | native | `time.rs` | `TopicHeader` serialises and deserialises correctly |
 | `event_row_serde_round_trip` | native | `time.rs` | `EventRow` serialises and deserialises correctly |
 | `bulk_export_serde_round_trip` | native | `time.rs` | `BulkExport` + `TopicExport` round-trip through JSON |
@@ -129,6 +138,10 @@ run its two WASM tests locally when touching `storage.rs`.
 | `now_timestamp_returns_iso_utc_string` | WASM | `time.rs` | non-empty, contains `T`, ends with `Z` |
 | `now_local_datetime_str_has_expected_shape` | WASM | `time.rs` | 19-char `YYYY-MM-DDTHH:MM:SS` layout |
 | `new_id_is_uuid_v4` | WASM | `time.rs` | ID is a version-4 UUID (`crypto.randomUUID()`) |
+| `local_datetime_str_round_trips_to_the_second` | WASM | `time.rs` | `datetime-local` value parses back to the same second |
+| `day_starts_are_consecutive_local_midnights` | WASM | `time.rs` | 30 local midnights, 23–25 h apart, last one is today |
+| `week_starts_are_consecutive_mondays` | WASM | `time.rs` | 12 Monday midnights, ~7 days apart, current week contains now |
+| `short_day_label_formats_local_date` | WASM | `time.rs` | "Mon 5 Oct" |
 | `new_id_is_unique_across_calls` | WASM | `time.rs` | two consecutive calls differ |
 | `time_boundaries_ordering_invariants` | WASM | `time.rs` | `today_start ≤ now < today_end`, `month_start ≤ now`, `week_start ≤ now` |
 | `time_boundaries_today_span_is_exactly_one_day` | WASM | `time.rs` | `today_end − today_start == 86 400 000` |
@@ -142,8 +155,11 @@ run its two WASM tests locally when touching `storage.rs`.
 | `idb_load_events_sorted_descending` | WASM | `db.rs` | `load_events_for_topic` returns events newest-first |
 | `idb_refresh_topic_counts` | WASM | `db.rs` | `refresh_topic_counts_idb` replaces stale counts with correct recomputed values |
 | `idb_add_event_and_update_header_atomic` | WASM | `db.rs` | event and header written atomically; both present in IDB after success |
-| `idb_enrich_does_not_resurrect_deleted_event` | WASM | `db.rs` | GPS enrichment of an event deleted meanwhile writes nothing |
-| `idb_enrich_updates_existing_event` | WASM | `db.rs` | GPS enrichment overwrites an existing event in place |
+| `idb_update_event_does_not_resurrect_deleted_event` | WASM | `db.rs` | updating an event deleted meanwhile writes nothing |
+| `idb_update_event_overwrites_existing_event` | WASM | `db.rs` | `update_event_idb` overwrites an existing event in place |
+| `idb_update_event_changes_timestamp_and_counts` | WASM | `db.rs` | moving an event 3 days back → today 0, week 1 after `refresh_topic_counts_idb` |
+| `idb_enrich_gps_keeps_note` | WASM | `db.rs` | a note written while the GPS fix was pending survives `enrich_gps_idb` |
+| `idb_enrich_gps_skips_deleted_event` | WASM | `db.rs` | a GPS fix for a deleted event writes nothing, returns `None` |
 | `idb_open_failure_returns_err` | WASM | `db.rs` | a rejected IDB open (version downgrade) returns `Err` instead of panicking |
 | `topic_signal_outlives_disposed_handler_scope` | WASM | `app.rs` | `new_topic_signal` survives disposal of the scope it was created in |
 | `undo_logged_event_restores_counts` | WASM | `app.rs` | Undo deletes the logged event and brings counts back to 0 |
@@ -197,6 +213,8 @@ rust-toolchain.toml      ← stable + wasm32-unknown-unknown
 ├── hooks/session-start.sh ← provisions web sessions (toolchain, trunk, wasm-pack, search tools, sem/weave)
 └── auto-pr.sh
 tools/
+├── index.html           ← static landing page, served at /tools/ (copied by deploy.yml)
+├── tech-event-announce/ ← served at /tools/tech-event-announce/ (same layout as trackit)
 └── trackit/             ← served at /tools/trackit/
     ├── Cargo.toml
     ├── Trunk.toml
@@ -223,6 +241,7 @@ To add a new tool: create `tools/<name>/` with its own `Cargo.toml` and
 | `tools/tech-event-announce/src/app.rs` | Form + output cards (copy to clipboard, Mastodon char counter) |
 | `tools/tech-event-announce/src/templates.rs` | Pure text templates (chat, e-mail, Mastodon) taking `&Settings`; grapheme / Mastodon counting; German date parsing + weekday hint; `mailto_url` |
 | `tools/tech-event-announce/src/storage.rs` | Fail-soft `localStorage` wrapper (`load` / `save`) |
+| `tools/index.html` | Static landing page at `/tools/` linking both tools (no build step; copied into the Pages artifact by `deploy.yml`) |
 | `tools/{trackit,tech-event-announce}/public/service-worker.js` | Offline cache, one per tool; caches are prefixed with the tool name |
 
 ## Key dependencies
@@ -265,7 +284,13 @@ Two IDB stores:
 
 Counts (today / week / month / total) are stored **denormalized** in `TopicHeader` and recomputed from `EventRow` timestamps whenever events are added, deleted, or imported. `time_boundaries()` returns a `Bounds` struct, `event_row_counts()` a `Counts` struct; a single new event is applied with `with_added_event()`.
 
-Logging an event (`record_event` in `app.rs`) writes the event and the bumped header in one transaction, then attaches a GPS fix in the background via `enrich_event_idb`, which only writes if the event still exists (it may have been deleted while waiting for the fix).
+Logging an event (`record_event` in `app.rs`) writes the event and the bumped header in one transaction, then attaches a GPS fix in the background via `enrich_gps_idb`: it reads the *stored* row and sets only the GPS fields (so a note typed meanwhile is kept), and writes nothing if the event was deleted while waiting.
+
+`EventRow.note` (`#[serde(default)]`) is an optional free-text note. Note and time edits in the event detail screen go through `update_event_idb` (writes only if the event still exists); a time edit then recomputes the topic's counts with `refresh_topic_counts_idb`.
+
+### Statistics (topic detail)
+
+`StatsCard` shows a column chart of events per day (last 30 days) or per Monday-based week (last 12 weeks), plus the average interval between all of the topic's events. Bucket boundaries are local midnights built from calendar dates (`day_starts` / `week_starts`, DST-safe); counting and the interval text are pure (`bucket_counts`, `average_interval_ms`, `format_interval`). Inline SVG, no chart dependency; bar colour `--chart-bar` (#4a90e2 / #5296e6 dark), checked with the dataviz palette validator. Tapping/hovering a column shows its date and count; the chart has an `aria-label` summary.
 
 ### Reactive model
 
@@ -278,6 +303,8 @@ Leptos signals are the only state:
 - `App` keeps `db_ready: RwSignal<bool>` and `db_error: RwSignal<Option<String>>` locally; `open_db()` returns `Result` and a failure renders a "Storage unavailable" message
 - Topic signals are created only via `new_topic_signal(&app_owner, h)` so they are owned by `App` (see Gotchas)
 - `RwSignal<Option<EventRow>>` in context holds the event currently open in the event detail screen
+- `DetailEvents { page, all }` in context: the events of the topic open in the detail screen (`all` = every event newest first, feeds the chart; `page` = visible prefix). Shared with the event detail screen so edits and GPS fixes show up in the list (`insert` / `replace` / `remove` / `show_enriched` keep it sorted).
+- `StatsCard` local state: `period` (30 days / 12 weeks) and the selected column
 
 IDB calls always happen inside `spawn_local` (async on the WASM event loop).
 
@@ -393,6 +420,9 @@ Rules:
   detail screens parked off-screen to the right; Playwright's scroll-into-view sometimes sets
   `.app.scrollLeft`, dragging those screens into view. Real taps/keys don't. In e2e scripts
   submit forms with Enter (or reset `scrollLeft`) instead of clicking.
+- **`datetime-local` drops `:00` seconds from its value** ("…T09:30" instead of "…T09:30:00"),
+  so compare parsed instants, not strings. Playwright's `fill()` rejects values with seconds;
+  set `.value` and dispatch `input` in e2e scripts instead.
 - **Service-worker caches are per origin**, shared by all tools on GitHub Pages. Each SW must only
   delete caches with its own prefix (`trackit-`, `tech-event-announce-`).
 - **`weave setup`** rewrites `.gitattributes` with its full pattern list; only run it when
