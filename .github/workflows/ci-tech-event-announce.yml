@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'tools/tech-event-announce/**'
+      - 'tools/_shared/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'

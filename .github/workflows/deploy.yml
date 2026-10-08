@@ -8,6 +8,7 @@ on:
       - 'tools/trackit/**'
       - 'tools/tech-event-announce/**'
       - 'tools/index.html'
+      - 'tools/_shared/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
