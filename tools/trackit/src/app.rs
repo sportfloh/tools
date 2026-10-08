@@ -6,7 +6,7 @@ use crate::db::{
 };
 use crate::time::{
     Direction, NameError, average_interval_ms, bucket_counts, day_starts, event_row_counts,
-    export_all, export_topic, format_interval, format_timestamp, local_datetime_str,
+    export_all, export_topic, format_interval, format_timestamp, local_datetime_str, map_url,
     merge_new_events, move_item, new_id, now_local_datetime_str, now_timestamp, parse_bulk_import,
     parse_import_line, short_day_label, time_boundaries, validate_topic_name, week_starts,
     with_added_event,
@@ -1212,6 +1212,7 @@ pub fn EventDetail() -> impl IntoView {
                         let spd_str  = e.speed.map(|v| format!("{:.1} m/s", v)).unwrap_or("—".into());
                         let acc_str  = fmt_opt(e.accuracy, "m ±", 1);
                         let aac_str  = fmt_opt(e.altitude_accuracy, "m ±", 1);
+                        let map_href = e.lat.zip(e.lon).map(|(lat, lon)| map_url(lat, lon));
                         view! {
                             <div class="event-detail-card">
                                 <div class="event-detail-section">
@@ -1235,6 +1236,18 @@ pub fn EventDetail() -> impl IntoView {
                                         <span class="event-detail-label">"Alt. accuracy"</span>
                                         <span class="event-detail-value">{aac_str}</span>
                                     </div>
+                                    {map_href.map(|href| view! {
+                                        <div class="event-detail-row">
+                                            <a
+                                                class="event-map-link"
+                                                href=href
+                                                target="_blank"
+                                                rel="noopener"
+                                            >
+                                                "Show on map ↗"
+                                            </a>
+                                        </div>
+                                    })}
                                 </div>
                                 <div class="event-detail-section">
                                     <div class="event-detail-row">

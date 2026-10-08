@@ -216,6 +216,12 @@ pub(crate) fn sort_topics(headers: &mut [TopicHeader]) {
     });
 }
 
+/// OpenStreetMap link centred on a position (works on every platform, unlike
+/// `geo:` URIs, which iOS Safari does not open).
+pub(crate) fn map_url(lat: f64, lon: f64) -> String {
+    format!("https://www.openstreetmap.org/?mlat={lat:.6}&mlon={lon:.6}#map=17/{lat:.6}/{lon:.6}")
+}
+
 // ─── Statistics ───────────────────────────────────────────────────────────────
 
 /// Local midnights (epoch ms) of the last `n` days, oldest first, ending
@@ -447,7 +453,7 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 mod tests {
     use super::{
         Bounds, BulkExport, Counts, Direction, NameError, TopicExport, average_interval_ms,
-        bucket_counts, event_row_counts, format_interval, merge_new_events, move_item,
+        bucket_counts, event_row_counts, format_interval, map_url, merge_new_events, move_item,
         parse_bulk_import, sort_topics, validate_topic_name, with_added_event,
     };
     use crate::db::{EventRow, TopicHeader};
@@ -825,6 +831,22 @@ mod tests {
         };
         let back: EventRow = serde_json::from_str(&serde_json::to_string(&e).unwrap()).unwrap();
         assert_eq!(back.note.as_deref(), Some("Bergauf, 12 km"));
+    }
+
+    #[test]
+    fn map_url_formats_coordinates() {
+        assert_eq!(
+            map_url(48.137154, 11.576124),
+            "https://www.openstreetmap.org/?mlat=48.137154&mlon=11.576124#map=17/48.137154/11.576124"
+        );
+    }
+
+    #[test]
+    fn map_url_negative_coordinates_and_rounding() {
+        assert_eq!(
+            map_url(-33.8567844, -151.2152967),
+            "https://www.openstreetmap.org/?mlat=-33.856784&mlon=-151.215297#map=17/-33.856784/-151.215297"
+        );
     }
 
     #[test]

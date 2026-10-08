@@ -863,6 +863,13 @@ html, body {
   resize: vertical;
 }
 
+.event-map-link {
+  font-size: .9375rem;
+  color: var(--color-primary);
+  text-decoration: none;
+}
+.event-map-link:hover { text-decoration: underline; }
+
 /* Note under the timestamp in the event list */
 .event-text {
   flex: 1;
