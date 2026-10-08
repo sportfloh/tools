@@ -79,7 +79,11 @@ pub fn App() -> impl IntoView {
                             placeholder="dd.mm.yyyy"
                             prop:value=date
                             on:input=move |ev| date.set(event_target_value(&ev))
+                            aria-describedby="date-hint"
                         />
+                        <p id="date-hint" class="form-hint" aria-live="polite">
+                            {move || templates::date_warning(&date.get())}
+                        </p>
                     </div>
                     <div class="form-field">
                         <label class="form-label" for="inp-topic">"Thema"</label>

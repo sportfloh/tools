@@ -70,9 +70,112 @@ fn find_url_start(s: &str) -> Option<usize> {
     }
 }
 
+/// Parse a German date `D.M.YYYY` / `DD.MM.YYYY` into `(year, month, day)`,
+/// rejecting days that do not exist in that month (leap years included).
+pub fn parse_de_date(s: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = s.trim().split('.');
+    let (d, m, y) = (parts.next()?, parts.next()?, parts.next()?);
+    let digits =
+        |p: &str, lens: &[usize]| lens.contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit());
+    if parts.next().is_some() || !digits(d, &[1, 2]) || !digits(m, &[1, 2]) || !digits(y, &[4]) {
+        return None;
+    }
+    let (d, m, y): (u32, u32, i32) = (d.parse().ok()?, m.parse().ok()?, y.parse().ok()?);
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days_in_month = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    (1..=days_in_month).contains(&d).then_some((y, m, d))
+}
+
+/// Day of the week for a Gregorian date, 0 = Sunday … 6 = Saturday.
+pub fn weekday(y: i32, m: u32, d: u32) -> u32 {
+    // Sakamoto's algorithm.
+    const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if m < 3 { y - 1 } else { y };
+    (y + y / 4 - y / 100 + y / 400 + T[(m - 1) as usize] + d as i32).rem_euclid(7) as u32
+}
+
+/// Hint shown under the date field: `None` for an empty field or a valid
+/// Saturday, otherwise what is wrong with it.
+pub fn date_warning(s: &str) -> Option<String> {
+    const DAYS: [&str; 7] = [
+        "Sonntag",
+        "Montag",
+        "Dienstag",
+        "Mittwoch",
+        "Donnerstag",
+        "Freitag",
+        "Samstag",
+    ];
+    if s.trim().is_empty() {
+        return None;
+    }
+    let Some((y, m, d)) = parse_de_date(s) else {
+        return Some("Ungültiges Datum (TT.MM.JJJJ)".into());
+    };
+    match weekday(y, m, d) {
+        6 => None,
+        wd => Some(format!("Achtung: kein Samstag ({})", DAYS[wd as usize])),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- date validation ---
+
+    #[test]
+    fn parse_de_date_valid() {
+        assert_eq!(parse_de_date("08.11.2025"), Some((2025, 11, 8)));
+        assert_eq!(parse_de_date(" 8.11.2025 "), Some((2025, 11, 8)));
+    }
+
+    #[test]
+    fn parse_de_date_rejects_impossible_dates() {
+        assert_eq!(parse_de_date("31.04.2026"), None);
+        assert_eq!(parse_de_date("00.01.2026"), None);
+        assert_eq!(parse_de_date("12.13.2026"), None);
+        assert_eq!(parse_de_date("2026-10-10"), None);
+        assert_eq!(parse_de_date("10.10.26"), None);
+        assert_eq!(parse_de_date(""), None);
+    }
+
+    #[test]
+    fn parse_de_date_handles_leap_years() {
+        assert_eq!(parse_de_date("29.02.2024"), Some((2024, 2, 29)));
+        assert_eq!(parse_de_date("29.02.2025"), None);
+        assert_eq!(parse_de_date("29.02.2000"), Some((2000, 2, 29)));
+        assert_eq!(parse_de_date("29.02.1900"), None);
+    }
+
+    #[test]
+    fn weekday_known_dates() {
+        assert_eq!(weekday(2025, 11, 8), 6); // Saturday
+        assert_eq!(weekday(2026, 10, 10), 6); // Saturday
+        assert_eq!(weekday(2025, 11, 11), 2); // Tuesday
+        assert_eq!(weekday(2024, 2, 29), 4); // Thursday
+        assert_eq!(weekday(2000, 1, 1), 6); // Saturday
+    }
+
+    #[test]
+    fn date_warning_messages() {
+        assert_eq!(date_warning(""), None);
+        assert_eq!(date_warning("10.10.2026"), None);
+        assert_eq!(
+            date_warning("11.11.2025").as_deref(),
+            Some("Achtung: kein Samstag (Dienstag)")
+        );
+        assert_eq!(
+            date_warning("31.04.2026").as_deref(),
+            Some("Ungültiges Datum (TT.MM.JJJJ)")
+        );
+    }
 
     // --- chat ---
 
