@@ -122,6 +122,15 @@ pub fn weekday(y: i32, m: u32, d: u32) -> u32 {
     (y + y / 4 - y / 100 + y / 400 + T[(m - 1) as usize] + d as i32).rem_euclid(7) as u32
 }
 
+/// Days from a weekday (0 = Sunday … 6 = Saturday) to the *next* Saturday;
+/// on a Saturday that is the following week's.
+pub fn days_until_next_saturday(weekday: u32) -> u32 {
+    match (6 + 7 - weekday % 7) % 7 {
+        0 => 7,
+        n => n,
+    }
+}
+
 /// Hint shown under the date field: `None` for an empty field or a valid
 /// Saturday, otherwise what is wrong with it.
 pub fn date_warning(s: &str) -> Option<String> {
@@ -267,6 +276,19 @@ mod tests {
         assert_eq!(weekday(2025, 11, 11), 2); // Tuesday
         assert_eq!(weekday(2024, 2, 29), 4); // Thursday
         assert_eq!(weekday(2000, 1, 1), 6); // Saturday
+    }
+
+    #[test]
+    fn days_until_next_saturday_every_weekday() {
+        // Sunday … Saturday
+        let expected = [6, 5, 4, 3, 2, 1, 7];
+        for (weekday, days) in expected.into_iter().enumerate() {
+            assert_eq!(
+                days_until_next_saturday(weekday as u32),
+                days,
+                "weekday {weekday}"
+            );
+        }
     }
 
     #[test]
