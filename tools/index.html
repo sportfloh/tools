@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Tools</title>
+  <meta name="description" content="Small offline-capable web tools."/>
+  <meta name="theme-color" content="#1c1c1e"/>
+  <link rel="icon" href="trackit/icon.svg" type="image/svg+xml"/>
+  <!-- Landing page served at /tools/. Static: no build step, no external requests.
+       deploy.yml copies it to the root of the Pages artifact. -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      color-scheme: light;
+      --color-primary: #4a90e2;
+      --color-bg:      #f2f2f7;
+      --color-surface: #ffffff;
+      --color-border:  #e0e6ed;
+      --color-text:    #1a2332;
+      --color-muted:   #6b7a8d;
+      --radius:        12px;
+      --shadow:        0 2px 8px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
+      --shadow-hover:  0 4px 16px rgba(0,0,0,.12), 0 0 1px rgba(0,0,0,.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --color-primary: #5b9fe8;
+        --color-bg:      #000000;
+        --color-surface: #1c1c1e;
+        --color-border:  #38383a;
+        --color-text:    #e6edf3;
+        --color-muted:   #8e8e93;
+        --shadow:        0 2px 8px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
+        --shadow-hover:  0 4px 16px rgba(0,0,0,.55), 0 0 1px rgba(0,0,0,.40);
+      }
+    }
+
+    html, body {
+      min-height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--color-bg);
+      color: var(--color-text);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    header {
+      background: #1c1c1e;
+      color: #fff;
+      padding: calc(14px + env(safe-area-inset-top)) 16px 14px;
+      text-align: center;
+    }
+    header h1 { font-size: 1.0625rem; font-weight: 600; }
+
+    main {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .tool {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 14px 16px;
+      background: var(--color-surface);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      color: inherit;
+      text-decoration: none;
+      transition: box-shadow .15s, transform .15s;
+    }
+    .tool:hover { box-shadow: var(--shadow-hover); }
+    .tool:active { transform: scale(.99); }
+    .tool:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+    .tool img { width: 48px; height: 48px; flex-shrink: 0; border-radius: 11px; }
+    .tool-text { min-width: 0; flex: 1; }
+    .tool-name { display: block; font-size: 1rem; font-weight: 600; }
+    .tool-desc { display: block; font-size: .875rem; color: var(--color-muted); }
+    .chevron { color: var(--color-muted); font-size: 1.25rem; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <header><h1>Tools</h1></header>
+  <main>
+    <a class="tool" href="trackit/">
+      <img src="trackit/icon.svg" alt="" width="48" height="48"/>
+      <span class="tool-text">
+        <span class="tool-name">trackit</span>
+        <span class="tool-desc">Track events for any topic with a single tap.</span>
+      </span>
+      <span class="chevron" aria-hidden="true">›</span>
+    </a>
+    <a class="tool" href="tech-event-announce/">
+      <img src="tech-event-announce/icon.svg" alt="" width="48" height="48"/>
+      <span class="tool-text">
+        <span class="tool-name">Tech-Event Announce</span>
+        <span class="tool-desc">Generate Tech-Event announcements for Chat, E-Mail and Mastodon.</span>
+      </span>
+      <span class="chevron" aria-hidden="true">›</span>
+    </a>
+  </main>
+</body>
+</html>
