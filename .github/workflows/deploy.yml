@@ -7,6 +7,7 @@ on:
     paths:
       - 'tools/trackit/**'
       - 'tools/tech-event-announce/**'
+      - 'tools/index.html'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -85,6 +86,7 @@ jobs:
           cp -r tools/trackit/dist/. dist/trackit/
           mkdir -p dist/tech-event-announce
           cp -r tools/tech-event-announce/dist/. dist/tech-event-announce/
+          cp tools/index.html dist/index.html
 
       - name: Create Pages artifact
         run: |
