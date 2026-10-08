@@ -608,6 +608,16 @@ fn parse_add_param_raw(search: &str) -> Option<&str> {
     None
 }
 
+// ─── Topic signals ────────────────────────────────────────────────────────────
+
+/// Create a topic's signal owned by `owner` (the `App`), not by whichever
+/// reactive scope happens to be current. Inside an event handler that is the
+/// handler's view scope, e.g. the `<Show when=adding>` form, which is disposed
+/// as soon as it hides; the next access to the signal then panics.
+pub(crate) fn new_topic_signal(owner: &Owner, h: TopicHeader) -> RwSignal<TopicHeader> {
+    owner.with(|| RwSignal::new(h))
+}
+
 // ─── Foreground refresh helper ────────────────────────────────────────────────
 
 /// Recompute and persist every topic's counts from its stored events,
@@ -625,6 +635,8 @@ pub(crate) async fn refresh_all_topic_counts(db: &Rexie, topic_list: TopicList) 
 #[component]
 pub fn App() -> impl IntoView {
     let topic_list: TopicList = RwSignal::new(Vec::new());
+    // Copy handle to the App's owner, for creating topic signals from handlers.
+    let app_owner = StoredValue::new_local(Owner::current().expect("App runs inside an owner"));
     let db_ready_signal = RwSignal::new(false);
     // Set when IndexedDB cannot be opened (e.g. private browsing, blocked storage).
     let db_error: RwSignal<Option<String>> = RwSignal::new(None);
@@ -689,7 +701,12 @@ pub fn App() -> impl IntoView {
         }
 
         DB.with(|cell| *cell.borrow_mut() = Some(std::rc::Rc::new(db)));
-        topic_list.set(headers.into_iter().map(RwSignal::new).collect());
+        topic_list.set(
+            headers
+                .into_iter()
+                .map(|h| app_owner.with_value(|o| new_topic_signal(o, h)))
+                .collect(),
+        );
         db_ready_signal.set(true);
     });
 
@@ -795,7 +812,7 @@ pub fn App() -> impl IntoView {
                     for row in rows_with_topic {
                         add_event_idb(&db, &row).await;
                     }
-                    let header_sig = RwSignal::new(header);
+                    let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
                     topic_list.update(|rows| rows.push(header_sig));
                 });
             }
@@ -883,7 +900,7 @@ pub fn App() -> impl IntoView {
                         for row in &rows_with_topic {
                             add_event_idb(&db, row).await;
                         }
-                        let header_sig = RwSignal::new(header);
+                        let header_sig = app_owner.with_value(|o| new_topic_signal(o, header));
                         topic_list.update(|rows| rows.push(header_sig));
                     }
                 }
@@ -909,7 +926,8 @@ pub fn App() -> impl IntoView {
                 save_topic_header(&db, &h2).await;
             });
         }
-        topic_list.update(|rows| rows.push(RwSignal::new(header)));
+        let sig = app_owner.with_value(|o| new_topic_signal(o, header));
+        topic_list.update(|rows| rows.push(sig));
         set_new_name.set(String::new());
         adding.set(false);
     };
@@ -1065,6 +1083,24 @@ mod tests {
         let h = sig.get_untracked();
         assert_eq!(h.count_total, 1, "total should be 1 after refresh");
         assert_ne!(h.count_today, 99, "today should not be stale 99");
+    }
+
+    /// A topic added from the `<Show when=adding>` form must survive that
+    /// form's scope being disposed when the form hides.
+    #[wasm_bindgen_test]
+    fn topic_signal_outlives_disposed_handler_scope() {
+        let app = Owner::new();
+        let sig = app.with(|| {
+            let form_scope = Owner::new();
+            let sig = form_scope
+                .with(|| new_topic_signal(&app, TopicHeader::new("t".into(), "Running".into())));
+            form_scope.cleanup();
+            sig
+        });
+        assert!(
+            sig.try_get_untracked().is_some(),
+            "topic signal was disposed with the handler scope"
+        );
     }
 
     #[test]
