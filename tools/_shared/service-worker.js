@@ -6,7 +6,7 @@
 // - Page navigation: network-first, falling back to the cached page offline.
 //   index.html must not come from cache while online: Trunk renames the
 //   hashed assets on every build, so a stale page would reference old files.
-// - Hashed build assets (name-<16 hex>.js / _bg.wasm / .css): cache-first.
+// - Hashed build assets (name-<hash>.js / _bg.wasm / .css): cache-first.
 //   Their content never changes under the same name.
 // - Everything else (manifest, icon): stale-while-revalidate.
 // - After a fresh index.html arrives, hashed assets it no longer references
@@ -22,7 +22,9 @@ var CACHE_NAME = CACHE_PREFIX + 'v4';
 // Names used before the shared worker existed, cleaned up on activate.
 var LEGACY_PREFIXES = TOOL === 'trackit' ? ['event-tracker-'] : [];
 
-var HASHED_ASSET = /-[0-9a-f]{16}(?:_bg)?\.(?:js|wasm|css)$/;
+// Trunk prints the 64-bit hash without zero padding, so it is 1–16 hex
+// digits (about one build in 16 has 15).
+var HASHED_ASSET = /-[0-9a-f]{1,16}(?:_bg)?\.(?:js|wasm|css)$/;
 
 self.addEventListener('install', function(event) {
   event.waitUntil(

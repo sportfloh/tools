@@ -13,15 +13,18 @@ const KEY_SIGNATURE: &str = "tea.signature";
 
 /// Returns the date of the next Saturday (from today) as `DD.MM.YYYY`.
 /// If today is Saturday, returns next week's Saturday.
+///
+/// Built from the calendar date (day-of-month overflow is normalised by
+/// `Date`), not by adding 24 h steps, which lands on the previous day when
+/// the clocks go forward in between.
 fn next_saturday_str() -> String {
     let now = js_sys::Date::new_0();
-    let day = now.get_day() as i32; // 0 = Sunday … 6 = Saturday
-    let days_ahead = {
-        let d = (6 - day).rem_euclid(7);
-        if d == 0 { 7 } else { d }
-    };
-    let target_ms = now.get_time() + days_ahead as f64 * 86_400_000.0;
-    let t = js_sys::Date::new(&JsValue::from_f64(target_ms));
+    let days_ahead = templates::days_until_next_saturday(now.get_day());
+    let t = js_sys::Date::new_with_year_month_day(
+        now.get_full_year(),
+        now.get_month() as i32,
+        now.get_date() as i32 + days_ahead as i32,
+    );
     format!(
         "{:02}.{:02}.{:04}",
         t.get_date(),
@@ -338,5 +341,26 @@ fn OutputCard(
                 prop:value=move || text.get()
             />
         </div>
+    }
+}
+
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::next_saturday_str;
+    use crate::templates::{parse_de_date, weekday};
+    use wasm_bindgen_test::*;
+
+    wasm_bindgen_test_configure!(run_in_browser);
+
+    #[wasm_bindgen_test]
+    fn next_saturday_is_a_saturday_in_the_future() {
+        let s = next_saturday_str();
+        let (y, m, d) = parse_de_date(&s).unwrap_or_else(|| panic!("not a date: {s}"));
+        assert_eq!(weekday(y, m, d), 6, "{s} is not a Saturday");
+        let date = js_sys::Date::new_with_year_month_day(y as u32, m as i32 - 1, d as i32);
+        assert!(
+            date.get_time() > js_sys::Date::now(),
+            "{s} is not in the future"
+        );
     }
 }
