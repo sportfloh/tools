@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::JsValue;
 
-use crate::time::Counts;
+use crate::time::{Bounds, Counts};
 
 // ─── Data model ──────────────────────────────────────────────────────────────
 
@@ -93,8 +93,12 @@ pub(crate) fn get_db() -> Option<Rc<Rexie>> {
 
 // ─── IDB helpers ─────────────────────────────────────────────────────────────
 
+/// Schema version. v2 added the `by_topic_time` index; opening an existing v1
+/// database upgrades it in place (IndexedDB indexes the stored events).
+pub(crate) const DB_VERSION: u32 = 2;
+
 pub(crate) async fn open_db() -> Result<Rexie, rexie::Error> {
-    open_db_named("trackit-db", 1).await
+    open_db_named("trackit-db", DB_VERSION).await
 }
 
 async fn open_db_named(name: &str, version: u32) -> Result<Rexie, rexie::Error> {
@@ -104,10 +108,60 @@ async fn open_db_named(name: &str, version: u32) -> Result<Rexie, rexie::Error> 
         .add_object_store(
             ObjectStore::new("events")
                 .key_path("id")
-                .add_index(Index::new("by_topic", "topic_id")),
+                .add_index(Index::new("by_topic", "topic_id"))
+                // [topic_id, timestamp_ms]: count a topic's events in a time
+                // range without loading them.
+                .add_index(Index::new_array(
+                    "by_topic_time",
+                    ["topic_id", "timestamp_ms"],
+                )),
         )
         .build()
         .await
+}
+
+/// Today / week / month / total counts for each topic in `topic_ids`, using
+/// index counts in one readonly transaction (no events are loaded). Same
+/// boundary rules as `Counts::of_event`. `None` if the read failed.
+pub(crate) async fn count_topic_events_idb(
+    db: &Rexie,
+    topic_ids: &[String],
+    b: Bounds,
+) -> Option<Vec<Counts>> {
+    let tx = db
+        .transaction(&["events"], TransactionMode::ReadOnly)
+        .ok()?;
+    let store = tx.store("events").ok()?;
+    let by_time = store.index("by_topic_time").ok()?;
+    let by_topic = store.index("by_topic").ok()?;
+    let key = |id: &str, ms: f64| -> JsValue {
+        js_sys::Array::of2(&JsValue::from_str(id), &JsValue::from_f64(ms)).into()
+    };
+    // [lower, upper] on the timestamp, each end open or closed.
+    let range = |id: &str, lower: f64, upper: f64, upper_open: bool| {
+        KeyRange::bound(
+            &key(id, lower),
+            &key(id, upper),
+            Some(false),
+            Some(upper_open),
+        )
+        .ok()
+    };
+    let mut out = Vec::with_capacity(topic_ids.len());
+    for id in topic_ids {
+        let today = range(id, b.today_start, b.today_end, true)?;
+        let week = range(id, b.week_start, b.now, false)?;
+        let month = range(id, b.month_start, f64::INFINITY, false)?;
+        let total = KeyRange::only(&JsValue::from_str(id)).ok()?;
+        out.push(Counts {
+            today: by_time.count(Some(today)).await.ok()?,
+            week: by_time.count(Some(week)).await.ok()?,
+            month: by_time.count(Some(month)).await.ok()?,
+            total: by_topic.count(Some(total)).await.ok()?,
+        });
+    }
+    tx.done().await.ok()?;
+    Some(out)
 }
 
 pub(crate) async fn load_topic_headers(db: &Rexie) -> Vec<TopicHeader> {
@@ -193,14 +247,18 @@ pub(crate) async fn save_topic_headers_idb(db: &Rexie, headers: &[TopicHeader]) 
     tx.done().await.is_ok()
 }
 
+/// Recount one topic (via the index, without loading its events) and
+/// persist the header if its counts changed.
 pub(crate) async fn refresh_topic_counts_idb(db: &Rexie, header: &TopicHeader) -> TopicHeader {
-    let events = load_events_for_topic(db, &header.id).await;
+    let b = crate::time::time_boundaries();
+    let Some(counts) = count_topic_events_idb(db, std::slice::from_ref(&header.id), b).await else {
+        return header.clone();
+    };
     let mut updated = header.clone();
-    updated.set_counts(crate::time::event_row_counts(
-        &events,
-        crate::time::time_boundaries(),
-    ));
-    save_topic_header(db, &updated).await;
+    updated.set_counts(counts[0]);
+    if updated != *header {
+        save_topic_header(db, &updated).await;
+    }
     updated
 }
 
@@ -382,10 +440,11 @@ pub(crate) async fn delete_topic_idb(db: &Rexie, topic_id: &str) {
 mod wasm_tests {
     use super::{
         EventRow, GpsFix, TopicHeader, add_event_and_update_header_idb, add_event_idb,
-        add_events_bulk_idb, delete_event_idb, delete_topic_idb, enrich_gps_idb,
-        load_events_for_topic, load_topic_headers, open_db, open_db_named,
+        add_events_bulk_idb, count_topic_events_idb, delete_event_idb, delete_topic_idb,
+        enrich_gps_idb, load_events_for_topic, load_topic_headers, open_db, open_db_named,
         refresh_topic_counts_idb, save_topic_header, save_topic_headers_idb, update_event_idb,
     };
+    use rexie::{Index, ObjectStore};
     use wasm_bindgen_test::*;
 
     wasm_bindgen_test_configure!(run_in_browser);
@@ -782,5 +841,97 @@ mod wasm_tests {
             (counts.count_today, counts.count_week, counts.count_total),
             (0, 1, 1)
         );
+    }
+
+    fn ev_at(id: &str, topic: &str, ms: f64) -> EventRow {
+        EventRow {
+            timestamp_ms: ms,
+            ..test_event(id, topic, ms)
+        }
+    }
+
+    // IDB: index counts agree with counting the loaded events
+    #[wasm_bindgen_test]
+    async fn idb_count_topic_events_matches_event_row_counts() {
+        let db = open_db().await.unwrap();
+        let b = crate::time::time_boundaries();
+        let d = 86_400_000.0;
+        let rows = vec![
+            ev_at("cnt-1", "topic-cnt-a", b.now), // today, week, month
+            ev_at("cnt-2", "topic-cnt-a", b.today_start), // first instant of today
+            ev_at("cnt-3", "topic-cnt-a", b.now - 3.0 * d), // week
+            ev_at("cnt-4", "topic-cnt-a", b.now - 10.0 * d), // maybe month
+            ev_at("cnt-5", "topic-cnt-a", b.month_start - 1.0), // before this month
+            ev_at("cnt-6", "topic-cnt-a", b.now + 2.0 * d), // future: month, total
+            ev_at("cnt-7", "topic-cnt-b", b.now), // other topic
+        ];
+        assert!(add_events_bulk_idb(&db, &rows).await);
+
+        let ids = vec![
+            "topic-cnt-a".to_string(),
+            "topic-cnt-b".to_string(),
+            "topic-cnt-none".to_string(),
+        ];
+        let counts = count_topic_events_idb(&db, &ids, b)
+            .await
+            .expect("count read");
+        let expect = |topic: &str| {
+            let evs: Vec<EventRow> = rows
+                .iter()
+                .filter(|e| e.topic_id == topic)
+                .cloned()
+                .collect();
+            crate::time::event_row_counts(&evs, b)
+        };
+        assert_eq!(
+            counts,
+            vec![
+                expect("topic-cnt-a"),
+                expect("topic-cnt-b"),
+                Default::default()
+            ]
+        );
+    }
+
+    // IDB: a v1 database (no by_topic_time index) upgrades with its data intact
+    #[wasm_bindgen_test]
+    async fn idb_upgrade_v1_to_v2_keeps_data_and_indexes_it() {
+        let name = "trackit-test-upgrade";
+        let v1 = rexie::Rexie::builder(name)
+            .version(1)
+            .add_object_store(ObjectStore::new("topics").key_path("id"))
+            .add_object_store(
+                ObjectStore::new("events")
+                    .key_path("id")
+                    .add_index(Index::new("by_topic", "topic_id")),
+            )
+            .build()
+            .await
+            .unwrap();
+        let now = js_sys::Date::now();
+        assert!(
+            add_events_bulk_idb(
+                &v1,
+                &[
+                    ev_at("up-1", "topic-up", now),
+                    ev_at("up-2", "topic-up", now - 1.0)
+                ]
+            )
+            .await
+        );
+        v1.close();
+
+        let v2 = open_db_named(name, super::DB_VERSION)
+            .await
+            .expect("upgrade");
+        assert_eq!(load_events_for_topic(&v2, "topic-up").await.len(), 2);
+        let counts = count_topic_events_idb(
+            &v2,
+            &["topic-up".to_string()],
+            crate::time::time_boundaries(),
+        )
+        .await
+        .expect("count read");
+        assert_eq!((counts[0].today, counts[0].total), (2, 2));
     }
 }

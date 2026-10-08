@@ -1,8 +1,8 @@
 use crate::db::{
     DB, EventRow, GpsFix, TopicHeader, add_event_and_update_header_idb, add_events_bulk_idb,
-    delete_event_idb, delete_topic_idb, enrich_gps_idb, get_db, load_events_for_topic,
-    load_topic_headers, open_db, refresh_topic_counts_idb, save_topic_header,
-    save_topic_headers_idb, update_event_idb,
+    count_topic_events_idb, delete_event_idb, delete_topic_idb, enrich_gps_idb, get_db,
+    load_events_for_topic, load_topic_headers, open_db, refresh_topic_counts_idb,
+    save_topic_header, save_topic_headers_idb, update_event_idb,
 };
 use crate::time::{
     Direction, NameError, average_interval_ms, bucket_counts, day_starts, event_row_counts,
@@ -1429,15 +1429,28 @@ pub(crate) fn import_message(scope: &str, o: ImportOutcome) -> String {
 
 // ─── Foreground refresh helper ────────────────────────────────────────────────
 
-/// Recompute and persist every topic's counts from its stored events,
-/// then update the corresponding Leptos signals.
-/// Called on startup and whenever the page returns to the foreground after a
-/// potential day rollover.
+/// Recount every topic (index counts, one transaction), update the signals
+/// whose counts changed and persist only those headers.
+/// Called right after startup and whenever the page returns to the foreground.
 pub(crate) async fn refresh_all_topic_counts(db: &Rexie, topic_list: TopicList) {
-    for sig in topic_list.get_untracked() {
-        let h = sig.get_untracked();
-        let fresh = refresh_topic_counts_idb(db, &h).await;
-        sig.set(fresh);
+    let sigs = topic_list.get_untracked();
+    let ids: Vec<String> = sigs
+        .iter()
+        .map(|s| s.with_untracked(|h| h.id.clone()))
+        .collect();
+    // One readonly transaction of index counts; no events are loaded.
+    let Some(counts) = count_topic_events_idb(db, &ids, time_boundaries()).await else {
+        return;
+    };
+    let mut changed = Vec::new();
+    for (sig, c) in sigs.iter().zip(counts) {
+        if sig.with_untracked(|h| h.counts()) != c {
+            sig.update(|h| h.set_counts(c));
+            changed.push(sig.get_untracked());
+        }
+    }
+    if !changed.is_empty() {
+        save_topic_headers_idb(db, &changed).await;
     }
 }
 
@@ -1480,11 +1493,9 @@ pub fn App() -> impl IntoView {
                 return;
             }
         };
-        let headers_raw = load_topic_headers(&db).await;
-        let mut headers: Vec<TopicHeader> = Vec::new();
-        for h in &headers_raw {
-            headers.push(refresh_topic_counts_idb(&db, h).await);
-        }
+        // Show the stored headers right away; counts are refreshed below,
+        // after the list is on screen.
+        let mut headers = load_topic_headers(&db).await;
 
         // ── Handle ?add=<topic-name> ─────────────────────────────────────────
         if let Some(ref name) = pending_add {
@@ -1518,6 +1529,11 @@ pub fn App() -> impl IntoView {
                 .collect(),
         );
         db_ready_signal.set(true);
+
+        // Stored counts may be stale (a day or more may have passed).
+        if let Some(db) = get_db() {
+            refresh_all_topic_counts(&db, topic_list).await;
+        }
     });
 
     provide_context(topic_list);
@@ -1547,9 +1563,9 @@ pub fn App() -> impl IntoView {
         all: RwSignal::new(Vec::new()),
     });
 
-    // ── Foreground detection: refresh counts when a new day has started ───────
+    // ── Foreground detection: recount whenever the page becomes visible ───────
+    // Cheap (index counts only), and keeps the rolling 7-day count current too.
     {
-        let last_today_start = StoredValue::new(time_boundaries().today_start);
         let doc = web_sys::window().unwrap().document().unwrap();
         let doc2 = doc.clone(); // moved into the closure
 
@@ -1557,11 +1573,6 @@ pub fn App() -> impl IntoView {
             if doc2.hidden() {
                 return; // fired while going to background — nothing to do
             }
-            let new_ts = time_boundaries().today_start;
-            if new_ts == last_today_start.get_value() {
-                return; // same day, counts are still valid
-            }
-            last_today_start.set_value(new_ts);
             spawn_local(async move {
                 let Some(db) = get_db() else { return };
                 refresh_all_topic_counts(&db, topic_list).await;
