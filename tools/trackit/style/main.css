@@ -322,6 +322,29 @@ html, body {
   font-variant-numeric: tabular-nums;
 }
 
+/* ▲/▼ reorder buttons (edit mode) */
+.reorder-buttons {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding-right: 4px;
+}
+.btn-reorder {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 8px;
+  background: var(--color-bg);
+  color: var(--color-primary);
+  font-size: .8rem;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn-reorder:disabled {
+  color: var(--color-border);
+  cursor: default;
+}
+
 /* Inline rename field (edit mode) */
 .topic-rename-input {
   margin: 10px 0;

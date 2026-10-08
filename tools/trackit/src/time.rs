@@ -168,6 +168,37 @@ pub(crate) fn validate_topic_name(new: &str, others: &[String]) -> Result<String
     Ok(name.to_string())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Direction {
+    Up,
+    Down,
+}
+
+/// Swap `items[idx]` with its neighbour in `dir`. Returns `false` (and leaves
+/// `items` unchanged) when there is no neighbour that way.
+pub(crate) fn move_item<T>(items: &mut [T], idx: usize, dir: Direction) -> bool {
+    let other = match dir {
+        Direction::Up => idx.checked_sub(1),
+        Direction::Down => Some(idx + 1),
+    };
+    match other {
+        Some(other) if idx < items.len() && other < items.len() => {
+            items.swap(idx, other);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Order topics for display: by `position`, then by name.
+pub(crate) fn sort_topics(headers: &mut [TopicHeader]) {
+    headers.sort_by(|a, b| {
+        a.position
+            .cmp(&b.position)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
+
 pub(crate) fn parse_import_line(line: &str) -> Option<EventRow> {
     let line = line.trim();
     if line.is_empty() {
@@ -298,8 +329,9 @@ pub(crate) fn parse_bulk_import(json: &str) -> Option<BulkExport> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Bounds, BulkExport, Counts, NameError, TopicExport, event_row_counts, merge_new_events,
-        parse_bulk_import, validate_topic_name, with_added_event,
+        Bounds, BulkExport, Counts, Direction, NameError, TopicExport, event_row_counts,
+        merge_new_events, move_item, parse_bulk_import, sort_topics, validate_topic_name,
+        with_added_event,
     };
     use crate::db::{EventRow, TopicHeader};
 
@@ -475,6 +507,7 @@ mod tests {
             count_today: 1,
             count_week: 5,
             count_month: 10,
+            position: 0,
         };
         let json = serde_json::to_string(&h).unwrap();
         let h2: TopicHeader = serde_json::from_str(&json).unwrap();
@@ -577,6 +610,37 @@ mod tests {
             validate_topic_name("Running", &names(&["Yoga"])),
             Ok("Running".into())
         );
+    }
+
+    #[test]
+    fn move_item_up_and_down() {
+        let mut v = vec!['a', 'b', 'c'];
+        assert!(move_item(&mut v, 2, Direction::Up));
+        assert_eq!(v, ['a', 'c', 'b']);
+        assert!(move_item(&mut v, 0, Direction::Down));
+        assert_eq!(v, ['c', 'a', 'b']);
+    }
+
+    #[test]
+    fn move_item_at_the_ends_is_a_no_op() {
+        let mut v = vec!['a', 'b'];
+        assert!(!move_item(&mut v, 0, Direction::Up));
+        assert!(!move_item(&mut v, 1, Direction::Down));
+        assert!(!move_item(&mut v, 5, Direction::Up));
+        assert_eq!(v, ['a', 'b']);
+    }
+
+    #[test]
+    fn sort_topics_by_position_then_name() {
+        let h = |name: &str, position| TopicHeader {
+            position,
+            ..TopicHeader::new(name.into(), name.into())
+        };
+        // Legacy records all have position 0 and fall back to name order.
+        let mut v = vec![h("Yoga", 0), h("Swim", 2), h("Run", 0), h("Bike", 1)];
+        sort_topics(&mut v);
+        let names: Vec<&str> = v.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, ["Run", "Yoga", "Bike", "Swim"]);
     }
 
     #[test]

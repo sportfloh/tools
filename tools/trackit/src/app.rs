@@ -2,11 +2,12 @@ use crate::db::{
     DB, EventRow, TopicHeader, add_event_and_update_header_idb, add_events_bulk_idb,
     delete_event_idb, delete_topic_idb, enrich_event_idb, get_db, load_events_for_topic,
     load_topic_headers, open_db, refresh_topic_counts_idb, save_topic_header,
+    save_topic_headers_idb,
 };
 use crate::time::{
-    NameError, event_row_counts, export_all, export_topic, format_timestamp, merge_new_events,
-    new_id, now_local_datetime_str, now_timestamp, parse_bulk_import, parse_import_line,
-    time_boundaries, validate_topic_name, with_added_event,
+    Direction, NameError, event_row_counts, export_all, export_topic, format_timestamp,
+    merge_new_events, move_item, new_id, now_local_datetime_str, now_timestamp, parse_bulk_import,
+    parse_import_line, time_boundaries, validate_topic_name, with_added_event,
 };
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -348,6 +349,45 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
         topic_list.update(|rows| rows.retain(|s| s.with_untracked(|h| h.id != id2)));
     };
 
+    // ▲/▼ in edit mode: swap with the neighbour, then persist every position
+    // so legacy records (all position 0) get a stable order too.
+    let move_topic = move |dir: Direction| {
+        let id = topic_signal.with_untracked(|h| h.id.clone());
+        let mut moved = false;
+        topic_list.update(|rows| {
+            if let Some(idx) = rows.iter().position(|s| s.with_untracked(|h| h.id == id)) {
+                moved = move_item(rows, idx, dir);
+            }
+        });
+        if !moved {
+            return;
+        }
+        let headers: Vec<TopicHeader> = topic_list.with_untracked(|rows| {
+            rows.iter()
+                .enumerate()
+                .map(|(i, s)| {
+                    let i = i as u32;
+                    if s.with_untracked(|h| h.position != i) {
+                        s.update(|h| h.position = i);
+                    }
+                    s.get_untracked()
+                })
+                .collect()
+        });
+        if let Some(db) = get_db() {
+            spawn_local(async move {
+                save_topic_headers_idb(&db, &headers).await;
+            });
+        }
+    };
+    let is_at = move |first: bool| {
+        let id = topic_signal.with(|h| h.id.clone());
+        topic_list.with(|rows| {
+            let end = if first { rows.first() } else { rows.last() };
+            end.is_some_and(|s| s.with_untracked(|h| h.id == id))
+        })
+    };
+
     let go_detail = move |ev: leptos::ev::MouseEvent| {
         ev.stop_propagation();
         let id = topic_signal.with_untracked(|h| h.id.clone());
@@ -412,16 +452,43 @@ pub fn TopicCard(topic_signal: RwSignal<TopicHeader>) -> impl IntoView {
             </Show>
             <Show
                 when=is_pending_delete
-                fallback=move || view! {
-                    <button
-                        class="btn-detail"
-                        type="button"
-                        on:click=go_detail
-                        title="Details"
-                        aria-label=move || format!("Details for {}", topic_name.get())
-                    >
-                        "›"
-                    </button>
+                fallback=move || if editing.get() {
+                    view! {
+                        <div class="reorder-buttons">
+                            <button
+                                class="btn-reorder"
+                                type="button"
+                                disabled=move || is_at(true)
+                                on:click=move |_| move_topic(Direction::Up)
+                                aria-label=move || format!("Move {} up", topic_name.get())
+                            >
+                                "▲"
+                            </button>
+                            <button
+                                class="btn-reorder"
+                                type="button"
+                                disabled=move || is_at(false)
+                                on:click=move |_| move_topic(Direction::Down)
+                                aria-label=move || format!("Move {} down", topic_name.get())
+                            >
+                                "▼"
+                            </button>
+                        </div>
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <button
+                            class="btn-detail"
+                            type="button"
+                            on:click=go_detail
+                            title="Details"
+                            aria-label=move || format!("Details for {}", topic_name.get())
+                        >
+                            "›"
+                        </button>
+                    }
+                    .into_any()
                 }
             >
                 <button
@@ -890,6 +957,16 @@ fn other_topic_names(topic_list: TopicList, except: &str) -> Vec<String> {
     })
 }
 
+/// Position for a newly created topic: after all existing ones.
+fn next_position(topic_list: TopicList) -> u32 {
+    topic_list.with_untracked(|rows| {
+        rows.iter()
+            .map(|s| s.with_untracked(|h| h.position))
+            .max()
+            .map_or(0, |max| max + 1)
+    })
+}
+
 // ─── Topic signals ────────────────────────────────────────────────────────────
 
 /// Create a topic's signal owned by `owner` (the `App`), not by whichever
@@ -953,7 +1030,10 @@ pub(crate) async fn import_into_topic(
             save_topic_header(db, &sig.get_untracked()).await;
         }
         None => {
-            let mut header = TopicHeader::new(topic_id, name);
+            let mut header = TopicHeader {
+                position: next_position(topic_list),
+                ..TopicHeader::new(topic_id, name)
+            };
             header.set_counts(counts);
             save_topic_header(db, &header).await;
             let sig = app_owner.with_value(|o| new_topic_signal(o, header));
@@ -1252,7 +1332,10 @@ pub fn App() -> impl IntoView {
                 return;
             }
         };
-        let header = TopicHeader::new(new_id(), name);
+        let header = TopicHeader {
+            position: next_position(topic_list),
+            ..TopicHeader::new(new_id(), name)
+        };
         if let Some(db) = get_db() {
             let h2 = header.clone();
             spawn_local(async move {
@@ -1401,6 +1484,7 @@ mod tests {
             count_today: 99,
             count_week: 99,
             count_month: 99,
+            position: 0,
             count_total: 99,
         };
         save_topic_header(&db, &header).await;
